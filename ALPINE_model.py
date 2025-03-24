@@ -17,7 +17,7 @@ from dataclasses import dataclass
 @dataclass
 class SimplifiedGPTConfig:
     block_size: int = 32
-    vocab_size: int = 12  # For a 10-node graph plus padding
+    vocab_size: int = 10  # For a 10-node graph plus padding
     n_layer: int = 1
     n_head: int = 1
     n_embd: int = 10     # Set to be the same as vocab_size as per paper
