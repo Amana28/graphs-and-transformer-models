@@ -10,5 +10,10 @@
 data/simple_graph/*
 !data/simple_graph/*.py
 
+# Ignore visualization files (for now)
+/visualization-scripts/
+
 # Ignore __pycache__ directories
 __pycache__/
+
+
