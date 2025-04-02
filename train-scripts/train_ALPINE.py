@@ -26,7 +26,7 @@ import re
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import the simplified model instead of the standard GPT
-from ALPINE_simplified_model import SimplifiedGPTConfig, SimplifiedGPT
+from ALPINE_model import SimplifiedGPTConfig, SimplifiedGPT
 from logger import get_logger
 import logging
 
