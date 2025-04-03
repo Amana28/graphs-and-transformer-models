@@ -2,14 +2,14 @@ import os
 from collections import Counter
 import tiktoken
 import matplotlib.pyplot as plt
-from model import GPTConfig, GPT
+from model.model import GPTConfig, GPT
 import numpy as np
 import networkx as nx
 import argparse
 import pickle
 import re
 import torch
-from utils_final import (
+from gpt_utils.utils_final import (
     AttentionVisualizer
 )
 
