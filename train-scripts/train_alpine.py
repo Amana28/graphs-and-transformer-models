@@ -27,7 +27,7 @@ import re
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import AlpineModel instead of GPT
-from alpine_model import AlpineConfig, AlpineModel, create_alpine_model
+from model.alpine_model import AlpineConfig, AlpineModel, create_alpine_model
 from logger import get_logger
 import logging
 
