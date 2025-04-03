@@ -1,3 +1,8 @@
+"""
+Implementation of the simplified Transformer model from the ALPINE paper for path-finding tasks.
+This model focuses on learning adjacency and reachability matrices for graph path-finding.
+"""
+
 import math
 import torch
 import torch.nn as nn
