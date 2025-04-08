@@ -34,7 +34,7 @@ import re
 # Add the parent directory to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from model.model import GPTConfig, GPT
+from model.updated_model import GPTConfig, GPT
 from logger import get_logger
 import logging
 
@@ -50,6 +50,8 @@ parser.add_argument('--n_embd', type=int, default=120, help='Size of the embeddi
 parser.add_argument('--max_iters', type=int, default=10000, help='Number of Iterations (default: 10000)')
 parser.add_argument('--num_nodes', type=int, default=100, help='Number of Nodes (default: 100)')
 parser.add_argument('--num_of_paths', type=int, default=20, help='Number of Paths (default: 1)')
+parser.add_argument('--use_identity_embeddings', action='store_true', help='Use identity matrix for embeddings (default: False)')
+parser.add_argument('--use_positional_embeddings', action='store_false', dest='use_positional_embeddings', help='Use positional embeddings (default: True)')
 
 args = parser.parse_args()
 
@@ -60,6 +62,8 @@ n_embd = args.n_embd
 max_iters = args.max_iters
 num_nodes = args.num_nodes
 num_of_paths = args.num_of_paths
+use_identity_embeddings = args.use_identity_embeddings  # Default is False (use learned embeddings)
+use_positional_embeddings = args.use_positional_embeddings  # Default is True (use positional embeddings)
 
 data_dir = os.path.join('data', f'{dataset}/{num_nodes}')
 with open(os.path.join(data_dir, 'meta.pkl'), 'rb') as f:
@@ -68,7 +72,25 @@ with open(os.path.join(data_dir, 'meta.pkl'), 'rb') as f:
 stoi, itos = meta['stoi'], meta['itos']
 block_size = meta['block_size']
 
-out_dir = f'out/{dataset}_{n_layer}_{n_head}_{n_embd}_{num_nodes}'
+# Add embedding configuration to the config string
+embedding_suffix = ""
+# Only add suffix for non-default configurations
+# Default configurations:
+# 1. learned + pos  (default in arguments)
+# 2. identity + pos (explicitly requested but still considered default)
+if use_identity_embeddings and not use_positional_embeddings:
+    embedding_suffix = "_identity_nopos"
+elif not use_identity_embeddings and not use_positional_embeddings:
+    embedding_suffix = "_learned_nopos"
+elif use_identity_embeddings and use_positional_embeddings:
+    embedding_suffix = "_identity_pos"
+
+# For the default settings (learned + pos OR identity + pos), use empty string
+log_suffix = embedding_suffix
+
+# Modify the config to include embedding settings
+config = f"{n_layer}_{n_head}_{n_embd}{embedding_suffix}"
+out_dir = f'out/{dataset}_{config}_{num_nodes}'
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -169,7 +191,6 @@ else:
     val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
 
 
-
 def get_batch(split):
     data = train_data if split == 'train' else val_data
     batch_size = train_batch_size if split == 'train' else val_batch_size
@@ -194,14 +215,11 @@ best_val_loss = 1e9
 
 # logger
 if(num_of_paths == 0):
-    logger = get_logger(os.path.join(out_dir, "no_output_train.log"))
-    log_file_name = os.path.join(out_dir, "train.log")
-    #logger.setLevel(logging.DEBUG)
+    logger = get_logger(os.path.join(out_dir, f"no_output_train{log_suffix}.log"))
+    log_file_name = os.path.join(out_dir, f"train{log_suffix}.log")
 else:
-    logger = get_logger(os.path.join(out_dir, f'no_output_train_{num_of_paths}.log'))
-    log_file_name = os.path.join(out_dir, f"train_{num_of_paths}.log")
-    #logger.setLevel(logging.DEBUG)
-
+    logger = get_logger(os.path.join(out_dir, f'no_output_train_{num_of_paths}{log_suffix}.log'))
+    log_file_name = os.path.join(out_dir, f"train_{num_of_paths}{log_suffix}.log")
 
 
 # attempt to derive vocab_size from the dataset
@@ -232,8 +250,18 @@ stoi, itos = meta['stoi'], meta['itos']
 decode = lambda l: ''.join([itos[i] for i in l])
 
 # model init
-model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
+model_args = dict(
+    n_layer=n_layer, 
+    n_head=n_head, 
+    n_embd=n_embd, 
+    block_size=block_size,
+    bias=bias, 
+    vocab_size=None, 
+    dropout=dropout,
+    use_identity_embeddings=use_identity_embeddings,  # Default is now False (use learned embeddings)
+    use_positional_embeddings=use_positional_embeddings  # Default is now True (use positional embeddings)
+)
+
 if init_from == 'scratch':
     print("Initializing a new model from scratch")
     if meta_vocab_size is None:
@@ -249,7 +277,11 @@ elif init_from == 'resume':
     checkpoint_model_args = checkpoint['model_args']
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
+    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 
+              'use_identity_embeddings', 'use_positional_embeddings']:
+        # Handle the case where older checkpoints don't have the new parameters
+        if k in ['use_identity_embeddings', 'use_positional_embeddings'] and k not in checkpoint_model_args:
+            continue
         model_args[k] = checkpoint_model_args[k]
     # create the model
     gptconf = GPTConfig(**model_args)
@@ -266,10 +298,19 @@ elif init_from == 'resume':
     best_val_loss = checkpoint['best_val_loss']
 elif init_from.startswith('gpt2'):
     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
-    override_args = dict(dropout=dropout)
+    override_args = dict(
+        dropout=dropout, 
+        use_identity_embeddings=use_identity_embeddings, 
+        use_positional_embeddings=use_positional_embeddings
+    )
     model = GPT.from_pretrained(init_from, override_args)
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
+    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 
+              'use_identity_embeddings', 'use_positional_embeddings']:
         model_args[k] = getattr(model.config, k)
+
+# Log the embedding configuration
+print(f"Using identity embeddings: {model_args.get('use_identity_embeddings', False)}")
+print(f"Using positional embeddings: {model_args.get('use_positional_embeddings', True)}")
 
 if block_size < model.config.block_size:
     model.crop_block_size(block_size)
@@ -335,7 +376,6 @@ if wandb_log and master_process:
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
 
-
 # training loop
 X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
@@ -351,12 +391,6 @@ while True:
     lr = get_lr(iter_num) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
-
-    
-        
-
-
-
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
@@ -385,16 +419,13 @@ while True:
                 }
                 print(f"saving checkpoint to {out_dir}")
                 logger.info(f"saving checkpoint to {out_dir}")
-                open_and_append(log_file_name, "saving checkpoint to {out_dir}")
-                if(num_of_paths == 0):
+                open_and_append(log_file_name, f"saving checkpoint to {out_dir}")
+                
+                # Don't add embedding configuration to checkpoint filename
+                if num_of_paths == 0:
                     torch.save(checkpoint, os.path.join(out_dir, f'{iter_num}_ckpt.pt'))
                 else:
                     torch.save(checkpoint, os.path.join(out_dir, f'{iter_num}_ckpt_{num_of_paths}.pt'))
-
-    # if iter_num % test_interval == 0 and master_process:
-    #     correct, tot = test_model()
-    #     corrects.append(correct)
-    #     totals.append(tot)
 
     if iter_num == 0 and eval_only:
         break
@@ -436,8 +467,8 @@ while True:
     if iter_num > max_iters:
         break
 
-torch.save(torch.tensor(corrects).cpu(), os.path.join(out_dir, f'corrects.pt'))
-torch.save(torch.tensor(totals).cpu(), os.path.join(out_dir, f'totals.pt'))
+torch.save(torch.tensor(corrects).cpu(), os.path.join(out_dir, f'corrects{log_suffix}.pt'))
+torch.save(torch.tensor(totals).cpu(), os.path.join(out_dir, f'totals{log_suffix}.pt'))
 
 if ddp:
     destroy_process_group()
