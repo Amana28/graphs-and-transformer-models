@@ -122,7 +122,7 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     use_identity_embeddings: bool = False  # Whether to use identity matrix for token embeddings
-    use_positional_embeddings: bool = True  # Whether to use positional embeddings
+    use_positional_encodings: bool = True  # Whether to use positional encodings
 
 class IdentityEmbedding(nn.Module):
     """Identity embedding layer - creates one-hot vectors for input tokens"""
@@ -164,20 +164,6 @@ class IdentityEmbedding(nn.Module):
             one_hot = torch.zeros(B, T, self.vocab_size, device=device)
             one_hot.scatter_(2, idx.unsqueeze(-1), 1)
             
-            # Create a fixed linear projection (initialized once and cached)
-            if not hasattr(self, 'projection'):
-                # Initialize projection matrix with truncated identity + zeros or just truncation
-                if self.n_embd < self.vocab_size:
-                    # Truncate: take only first n_embd dimensions
-                    projection = torch.zeros(self.vocab_size, self.n_embd, device=device)
-                    projection[:self.n_embd, :] = torch.eye(self.n_embd, device=device)
-                else:
-                    # Pad: use identity for first vocab_size dimensions, zeros for rest
-                    projection = torch.zeros(self.vocab_size, self.n_embd, device=device)
-                    projection[:, :self.vocab_size] = torch.eye(self.vocab_size, device=device)
-                
-                self.register_buffer('projection', projection)
-            
             # Apply the projection to get embeddings of the right dimension
             return one_hot @ self.projection
 
@@ -195,9 +181,9 @@ class GPT(nn.Module):
                    if not config.use_identity_embeddings 
                    else IdentityEmbedding(config.vocab_size, config.n_embd)),
             
-            # Position embeddings (only if enabled)
+            # Position encodings (only if enabled)
             wpe = (nn.Embedding(config.block_size, config.n_embd) 
-                   if config.use_positional_embeddings 
+                   if config.use_positional_encodings 
                    else None),
             
             drop = nn.Dropout(config.dropout),
@@ -223,12 +209,12 @@ class GPT(nn.Module):
     def get_num_params(self, non_embedding=True):
         """
         Return the number of parameters in the model.
-        For non-embedding count (default), the position embeddings get subtracted.
+        For non-embedding count (default), the position encodings get subtracted.
         The token embeddings would too, except due to the parameter sharing these
         params are actually used as weights in the final layer, so we include them.
         """
         n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding and self.config.use_positional_embeddings:
+        if non_embedding and self.config.use_positional_encodings:
             n_params -= self.transformer.wpe.weight.numel()
         return n_params
 
@@ -248,8 +234,8 @@ class GPT(nn.Module):
         # Get token embeddings
         tok_emb = self.transformer.wte(idx)  # (b, t, n_embd)
         
-        # Sum token embeddings with position embeddings if enabled
-        if self.config.use_positional_embeddings:
+        # Sum token embeddings with position encodings if enabled
+        if self.config.use_positional_encodings:
             pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0)  # (1, t)
             pos_emb = self.transformer.wpe(pos)  # (1, t, n_embd)
             x = self.transformer.drop(tok_emb + pos_emb)
@@ -279,7 +265,7 @@ class GPT(nn.Module):
         # but want to use a smaller block size for some smaller, simpler model
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
-        if self.config.use_positional_embeddings:
+        if self.config.use_positional_encodings:
             self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
         for block in self.transformer.h:
             if hasattr(block.attn, 'bias'):
@@ -290,7 +276,7 @@ class GPT(nn.Module):
         assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
         override_args = override_args or {} # default to empty dict
         # only dropout can be overridden see more notes below
-        assert all(k in ['dropout', 'use_identity_embeddings', 'use_positional_embeddings'] for k in override_args)
+        assert all(k in ['dropout', 'use_identity_embeddings', 'use_positional_encodings'] for k in override_args)
         from transformers import GPT2LMHeadModel
         print("loading weights from pretrained gpt: %s" % model_type)
 
@@ -308,7 +294,7 @@ class GPT(nn.Module):
         
         # Set default values for our new parameters
         config_args['use_identity_embeddings'] = False
-        config_args['use_positional_embeddings'] = True
+        config_args['use_positional_encodings'] = True
         
         # Handle overrides
         for k, v in override_args.items():
@@ -327,9 +313,9 @@ class GPT(nn.Module):
         sd_keys = sd.keys()
         sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
         
-        # Don't load positional embeddings if we're not using them
-        if not config_args['use_positional_embeddings']:
-            print("Not using positional embeddings, removing them from state dict keys")
+        # Don't load positional encodings if we're not using them
+        if not config_args['use_positional_encodings']:
+            print("Not using positional encodings, removing them from state dict keys")
             sd_keys = [k for k in sd_keys if not k.startswith('transformer.wpe')]
 
         # init a huggingface/transformers model
@@ -346,8 +332,8 @@ class GPT(nn.Module):
             sd_keys_hf = [k for k in sd_keys_hf if not k.startswith('transformer.wte')]
             sd_keys = [k for k in sd_keys if not k.startswith('transformer.wte')]
         
-        # Skip positional embeddings if not using them
-        if not config_args['use_positional_embeddings']:
+        # Skip positional encodings if not using them
+        if not config_args['use_positional_encodings']:
             sd_keys_hf = [k for k in sd_keys_hf if not k.startswith('transformer.wpe')]
         
         transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
