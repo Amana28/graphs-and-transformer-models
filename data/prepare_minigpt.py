@@ -14,7 +14,7 @@ num_nodes = args.num_nodes
 graph_type = args.graph_type
 
 # Define paths with graph type subdirectory
-base_dir = os.path.join(graph_type, f'{args.num_nodes}')
+base_dir = os.path.join("data", graph_type, f'{args.num_nodes}')
 output_dir = base_dir
 
 # Create directory if it doesn't exist
