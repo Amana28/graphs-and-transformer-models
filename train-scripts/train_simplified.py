@@ -51,7 +51,7 @@ parser.add_argument('--max_iters', type=int, default=10000, help='Number of Iter
 parser.add_argument('--num_nodes', type=int, default=100, help='Number of Nodes (default: 100)')
 parser.add_argument('--num_of_paths', type=int, default=20, help='Number of Paths (default: 1)')
 parser.add_argument('--use_learned_embeddings', action='store_true', help='Use learned embeddings instead of identity matrix (default: False)')
-parser.add_argument('--use_positional_embeddings', action='store_true', help='Use positional embeddings (default: False)')
+parser.add_argument('--use_positional_encodings', action='store_true', help='Use positional encodings (default: False)')
 
 args = parser.parse_args()
 
@@ -63,7 +63,7 @@ max_iters = args.max_iters
 num_nodes = args.num_nodes
 num_of_paths = args.num_of_paths
 use_identity_embeddings = not args.use_learned_embeddings  # Reverse the flag - we want identity by default
-use_positional_embeddings = args.use_positional_embeddings  # False by default
+use_positional_encodings = args.use_positional_encodings  # False by default
 
 data_dir = os.path.join('data', f'{dataset}/{num_nodes}')
 with open(os.path.join(data_dir, 'meta.pkl'), 'rb') as f:
@@ -78,7 +78,7 @@ if use_identity_embeddings:
     embedding_suffix += "_identity"
 else:
     embedding_suffix += "_learned"
-if use_positional_embeddings:
+if use_positional_encodings:
     embedding_suffix += "_pos"
 else:
     embedding_suffix += "_nopos"
@@ -209,7 +209,7 @@ iter_num = 0
 best_val_loss = 1e9
 
 # logger
-log_suffix = f"{'_learned' if not use_identity_embeddings else '_identity'}{'_pos' if use_positional_embeddings else '_nopos'}"
+log_suffix = f"{'_learned' if not use_identity_embeddings else '_identity'}{'_pos' if use_positional_encodings else '_nopos'}"
 if(num_of_paths == 0):
     logger = get_logger(os.path.join(out_dir, f"no_output_train{log_suffix}.log"))
     log_file_name = os.path.join(out_dir, f"train{log_suffix}.log")
@@ -255,7 +255,7 @@ model_args = dict(
     vocab_size=None, 
     dropout=dropout,
     use_identity_embeddings=use_identity_embeddings,  # Default is now True
-    use_positional_embeddings=use_positional_embeddings  # Default is now False
+    use_positional_encodings=use_positional_encodings  # Default is now False
 )
 
 if init_from == 'scratch':
@@ -274,9 +274,9 @@ elif init_from == 'resume':
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 
-              'use_identity_embeddings', 'use_positional_embeddings']:
+              'use_identity_embeddings', 'use_positional_encodings']:
         # Handle the case where older checkpoints don't have the new parameters
-        if k in ['use_identity_embeddings', 'use_positional_embeddings'] and k not in checkpoint_model_args:
+        if k in ['use_identity_embeddings', 'use_positional_encodings'] and k not in checkpoint_model_args:
             continue
         model_args[k] = checkpoint_model_args[k]
     # create the model
@@ -297,16 +297,16 @@ elif init_from.startswith('gpt2'):
     override_args = dict(
         dropout=dropout, 
         use_identity_embeddings=use_identity_embeddings, 
-        use_positional_embeddings=use_positional_embeddings
+        use_positional_encodings=use_positional_encodings
     )
     model = GPT.from_pretrained(init_from, override_args)
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 
-              'use_identity_embeddings', 'use_positional_embeddings']:
+              'use_identity_embeddings', 'use_positional_encodings']:
         model_args[k] = getattr(model.config, k)
 
 # Log the embedding configuration
 print(f"Using identity embeddings: {model_args.get('use_identity_embeddings', True)}")
-print(f"Using positional embeddings: {model_args.get('use_positional_embeddings', False)}")
+print(f"Using positional encodings: {model_args.get('use_positional_encodings', False)}")
 
 if block_size < model.config.block_size:
     model.crop_block_size(block_size)

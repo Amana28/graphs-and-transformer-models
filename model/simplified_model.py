@@ -131,6 +131,19 @@ class IdentityEmbedding(nn.Module):
         self.vocab_size = vocab_size
         self.n_embd = n_embd
         
+        # Initialize projection matrix at creation time
+        if n_embd != vocab_size:
+            if n_embd < vocab_size:
+                # Truncate: take only first n_embd dimensions
+                projection = torch.zeros(vocab_size, n_embd)
+                projection[:n_embd, :] = torch.eye(n_embd)
+            else:
+                # Pad: use identity for first vocab_size dimensions, zeros for rest
+                projection = torch.zeros(vocab_size, n_embd)
+                projection[:, :vocab_size] = torch.eye(vocab_size)
+            
+            self.register_buffer('projection', projection)
+        
     def forward(self, idx):
         # Create one-hot vectors for each input token
         # For efficient implementation, we create an identity matrix and use it as a lookup table
