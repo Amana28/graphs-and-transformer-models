@@ -160,9 +160,8 @@ if total_samples < batch_size:
 else:
     ix = torch.randint(total_samples, (batch_size,))
 
-# Create output file with timestamp for uniqueness
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-output_file = out_dir + f'pred_{typedata}_{ckpt_iter}_{timestamp}.txt'
+
+output_file = out_dir + f'pred_{typedata}_{ckpt_iter}.txt'
 with open(output_file, 'w') as f:
     pass
 
