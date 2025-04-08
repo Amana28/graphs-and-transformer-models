@@ -4,7 +4,7 @@ import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from model.simplified_model import GPTConfig, GPT 
+from model.updated_model import GPTConfig, GPT 
 
 import numpy as np
 import networkx as nx
@@ -17,6 +17,7 @@ from datetime import datetime
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--ckpt_iter', type=int, default=10000)
+    parser.add_argument('--dataset', type=str, default='simple_graph', help='Name of the dataset to use')  
     parser.add_argument('--config', type=str, default='1_1_120')
     parser.add_argument('--temperature', type=float, default=1)
     parser.add_argument('--device', type=str, default='cuda:0')
@@ -26,8 +27,8 @@ def parse_args():
     return parser.parse_args()
 
 args = parse_args()
-dataset = 'simple_graph'
 ckpt_iter = args.ckpt_iter
+dataset = args.dataset
 device = args.device
 temperature = args.temperature
 num_nodes = args.num_nodes

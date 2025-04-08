@@ -34,7 +34,7 @@ import re
 # Add the parent directory to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from model.simplified_model import GPTConfig, GPT
+from model.updated_model import GPTConfig, GPT
 from logger import get_logger
 import logging
 
@@ -51,7 +51,7 @@ parser.add_argument('--max_iters', type=int, default=10000, help='Number of Iter
 parser.add_argument('--num_nodes', type=int, default=100, help='Number of Nodes (default: 100)')
 parser.add_argument('--num_of_paths', type=int, default=20, help='Number of Paths (default: 1)')
 parser.add_argument('--use_identity_embeddings', action='store_true', help='Use identity matrix for embeddings (default: False)')
-parser.add_argument('--no_positional_embeddings', action='store_true', help='Do not use positional embeddings (default: False)')
+parser.add_argument('--use_positional_embeddings', action='store_false', dest='use_positional_embeddings', help='Use positional embeddings (default: True)')
 
 args = parser.parse_args()
 
@@ -62,8 +62,8 @@ n_embd = args.n_embd
 max_iters = args.max_iters
 num_nodes = args.num_nodes
 num_of_paths = args.num_of_paths
-use_identity_embeddings = args.use_identity_embeddings  # Default is now False (use learned embeddings)
-use_positional_embeddings = not args.no_positional_embeddings  # Default is now True (use positional embeddings)
+use_identity_embeddings = args.use_identity_embeddings  # Default is False (use learned embeddings)
+use_positional_embeddings = args.use_positional_embeddings  # Default is True (use positional embeddings)
 
 data_dir = os.path.join('data', f'{dataset}/{num_nodes}')
 with open(os.path.join(data_dir, 'meta.pkl'), 'rb') as f:
@@ -74,14 +74,19 @@ block_size = meta['block_size']
 
 # Add embedding configuration to the config string
 embedding_suffix = ""
-if use_identity_embeddings:
-    embedding_suffix += "_identity"
-else:
-    embedding_suffix += "_learned"
-if use_positional_embeddings:
-    embedding_suffix += "_pos"
-else:
-    embedding_suffix += "_nopos"
+# Only add suffix for non-default configurations
+# Default configurations:
+# 1. learned + pos  (default in arguments)
+# 2. identity + pos (explicitly requested but still considered default)
+if use_identity_embeddings and not use_positional_embeddings:
+    embedding_suffix = "_identity_nopos"
+elif not use_identity_embeddings and not use_positional_embeddings:
+    embedding_suffix = "_learned_nopos"
+elif use_identity_embeddings and use_positional_embeddings:
+    embedding_suffix = "_identity_pos"
+
+# For the default settings (learned + pos OR identity + pos), use empty string
+log_suffix = embedding_suffix
 
 # Modify the config to include embedding settings
 config = f"{n_layer}_{n_head}_{n_embd}{embedding_suffix}"
@@ -209,7 +214,6 @@ iter_num = 0
 best_val_loss = 1e9
 
 # logger
-log_suffix = f"{'_learned' if not use_identity_embeddings else '_identity'}{'_pos' if use_positional_embeddings else '_nopos'}"
 if(num_of_paths == 0):
     logger = get_logger(os.path.join(out_dir, f"no_output_train{log_suffix}.log"))
     log_file_name = os.path.join(out_dir, f"train{log_suffix}.log")
