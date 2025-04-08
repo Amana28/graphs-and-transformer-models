@@ -1,11 +1,19 @@
 """
-Training script for the ALPINE model (simplified Transformer) for path-finding tasks.
-
-This script is adapted from the original train.py, but uses the simplified
-AlpineModel architecture instead of the full GPT model.
+This training script can be run both on a single gpu in debug mode,
+and also in a larger training run with distributed data parallel (ddp).
 
 To run on a single GPU, example:
-$ python train_alpine.py --batch_size=32 --compile=False
+$ python train.py --batch_size=32 --compile=False
+
+To run with DDP on 4 gpus on 1 node, example:
+$ torchrun --standalone --nproc_per_node=4 train.py
+
+To run with DDP on 4 gpus across 2 nodes, example:
+- Run on the first (master) node with example IP 123.456.123.456:
+$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=123.456.123.456 --master_port=1234 train.py
+- Run on the worker node:
+$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 train.py
+(If your cluster does not have Infiniband interconnect prepend NCCL_IB_DISABLE=1)
 """
 
 import os
@@ -26,15 +34,14 @@ import re
 # Add the parent directory to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import AlpineModel instead of GPT
-from model.alpine_model import AlpineConfig, AlpineModel, create_alpine_model
+from model import GPTConfig, GPT
 from logger import get_logger
 import logging
 
 # -----------------------------------------------------------------------------
 # the input parameters
 
-parser = argparse.ArgumentParser(description='Training of the AlpineModel for path-finding.')
+parser = argparse.ArgumentParser(description='Training of the NanoGPT.')
 
 parser.add_argument('--dataset', type=str, default='simple_graph', help='Name of the dataset to use')  
 parser.add_argument('--n_layer', type=int, default=1, help='Number of layers (default: 1)')  
@@ -43,6 +50,8 @@ parser.add_argument('--n_embd', type=int, default=120, help='Size of the embeddi
 parser.add_argument('--max_iters', type=int, default=10000, help='Number of Iterations (default: 10000)')
 parser.add_argument('--num_nodes', type=int, default=100, help='Number of Nodes (default: 100)')
 parser.add_argument('--num_of_paths', type=int, default=20, help='Number of Paths (default: 1)')
+parser.add_argument('--use_identity_embeddings', action='store_true', help='Use identity matrix for embeddings')
+parser.add_argument('--use_positional_embeddings', action='store_false', help='Use positional embeddings (default: True)')
 
 args = parser.parse_args()
 
@@ -53,6 +62,8 @@ n_embd = args.n_embd
 max_iters = args.max_iters
 num_nodes = args.num_nodes
 num_of_paths = args.num_of_paths
+use_identity_embeddings = args.use_identity_embeddings
+use_positional_embeddings = args.use_positional_embeddings
 
 data_dir = os.path.join('data', f'{dataset}/{num_nodes}')
 with open(os.path.join(data_dir, 'meta.pkl'), 'rb') as f:
@@ -61,7 +72,14 @@ with open(os.path.join(data_dir, 'meta.pkl'), 'rb') as f:
 stoi, itos = meta['stoi'], meta['itos']
 block_size = meta['block_size']
 
-out_dir = f'out_alpine/{dataset}_{n_layer}_{n_head}_{n_embd}_{num_nodes}'
+# Add embedding configuration to output directory name
+embedding_config = ""
+if use_identity_embeddings:
+    embedding_config += "_identity"
+if not use_positional_embeddings:
+    embedding_config += "_nopos"
+
+out_dir = f'out/{dataset}_{n_layer}_{n_head}_{n_embd}_{num_nodes}{embedding_config}'
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -72,46 +90,53 @@ eval_iters = max_iters // 10
 
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'scratch' # 'scratch' or 'resume'
-
+init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
 wandb_log = False # disabled by default
 wandb_project = 'owt'
-wandb_run_name = 'alpine' # 'run' + str(time.time())
-
+wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
+#dataset = 'reasoning'
 gradient_accumulation_steps = 1 # used to simulate larger batch sizes
 train_batch_size = 1024 # if gradient_accumulation_steps > 1, this is the micro-batch size
 val_batch_size = 64
 batch_size = train_batch_size
-
+#block_size = 64
 # model
+#n_layer = 1 #12
+#n_head = 1 #12
+#n_embd = 384 #768
+
+
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
-
 # adamw optimizer
 learning_rate = 5e-4 # max learning rate 
+#max_iters = 50000 # total number of training iterations
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
-
 # learning rate decay settings
 decay_lr = True # whether to decay the learning rate
 warmup_iters = max_iters//20 # how many steps to warm up for
 lr_decay_iters = max_iters # should be ~= max_iters per Chinchilla
 min_lr = learning_rate/10 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
-
 # DDP settings
 backend = 'nccl' # 'nccl', 'gloo', etc.
-
 # system
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
 
+'''check_type = 'shortest'
+max_path_len = 10
+max_new_tokens = 200
+flag = 0
+test_interval = 100'''
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
+#exec(open('configurator.py').read()) # overrides from command line or config file
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
 
@@ -154,6 +179,7 @@ else:
     train_data = np.memmap(os.path.join(data_dir, f'train_{num_of_paths}.bin'), dtype=np.uint16, mode='r')
     val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
 
+
 def get_batch(split):
     data = train_data if split == 'train' else val_data
     batch_size = train_batch_size if split == 'train' else val_batch_size
@@ -177,12 +203,14 @@ iter_num = 0
 best_val_loss = 1e9
 
 # logger
+log_suffix = f"{'_identity' if use_identity_embeddings else ''}{'_nopos' if not use_positional_embeddings else ''}"
 if(num_of_paths == 0):
-    logger = get_logger(os.path.join(out_dir, "no_output_train.log"))
-    log_file_name = os.path.join(out_dir, "train.log")
+    logger = get_logger(os.path.join(out_dir, f"no_output_train{log_suffix}.log"))
+    log_file_name = os.path.join(out_dir, f"train{log_suffix}.log")
 else:
-    logger = get_logger(os.path.join(out_dir, f'no_output_train_{num_of_paths}.log'))
-    log_file_name = os.path.join(out_dir, f"train_{num_of_paths}.log")
+    logger = get_logger(os.path.join(out_dir, f'no_output_train_{num_of_paths}{log_suffix}.log'))
+    log_file_name = os.path.join(out_dir, f"train_{num_of_paths}{log_suffix}.log")
+
 
 # attempt to derive vocab_size from the dataset
 meta_path = os.path.join(data_dir, 'meta.pkl')
@@ -212,21 +240,45 @@ stoi, itos = meta['stoi'], meta['itos']
 decode = lambda l: ''.join([itos[i] for i in l])
 
 # model init
+model_args = dict(
+    n_layer=n_layer, 
+    n_head=n_head, 
+    n_embd=n_embd, 
+    block_size=block_size,
+    bias=bias, 
+    vocab_size=None, 
+    dropout=dropout,
+    use_identity_embeddings=use_identity_embeddings,  # New parameter
+    use_positional_embeddings=use_positional_embeddings  # New parameter
+)
+
 if init_from == 'scratch':
-    print("Initializing a new ALPINE model from scratch")
+    print("Initializing a new model from scratch")
     if meta_vocab_size is None:
-        print("defaulting to vocab_size of 50304 (50257 rounded up for efficiency)")
-    vocab_size = meta_vocab_size if meta_vocab_size is not None else 50304
-    model = create_alpine_model(vocab_size, block_size)
+        print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
+    model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
+    gptconf = GPTConfig(**model_args)
+    model = GPT(gptconf)
 elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
     # resume training from a checkpoint.
     ckpt_path = os.path.join(out_dir, 'ckpt.pt')
     checkpoint = torch.load(ckpt_path, map_location=device)
-    vocab_size = checkpoint['vocab_size']
-    model = create_alpine_model(vocab_size, block_size)
+    checkpoint_model_args = checkpoint['model_args']
+    # force these config attributes to be equal otherwise we can't even resume training
+    # the rest of the attributes (e.g. dropout) can stay as desired from command line
+    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 
+              'use_identity_embeddings', 'use_positional_embeddings']:
+        # Handle the case where older checkpoints don't have the new parameters
+        if k in ['use_identity_embeddings', 'use_positional_embeddings'] and k not in checkpoint_model_args:
+            continue
+        model_args[k] = checkpoint_model_args[k]
+    # create the model
+    gptconf = GPTConfig(**model_args)
+    model = GPT(gptconf)
     state_dict = checkpoint['model']
     # fix the keys of the state dictionary :(
+    # honestly no idea how checkpoints sometimes get this prefix, have to debug more
     unwanted_prefix = '_orig_mod.'
     for k,v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):
@@ -234,14 +286,32 @@ elif init_from == 'resume':
     model.load_state_dict(state_dict)
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
+elif init_from.startswith('gpt2'):
+    print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
+    override_args = dict(
+        dropout=dropout, 
+        use_identity_embeddings=use_identity_embeddings, 
+        use_positional_embeddings=use_positional_embeddings
+    )
+    model = GPT.from_pretrained(init_from, override_args)
+    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 
+              'use_identity_embeddings', 'use_positional_embeddings']:
+        model_args[k] = getattr(model.config, k)
 
+# Log the embedding configuration
+print(f"Using identity embeddings: {model_args.get('use_identity_embeddings', False)}")
+print(f"Using positional embeddings: {model_args.get('use_positional_embeddings', True)}")
+
+if block_size < model.config.block_size:
+    model.crop_block_size(block_size)
+    model_args['block_size'] = block_size # so that the checkpoint will have the right value
 model.to(device)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
 # optimizer
-optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, betas=(beta1, beta2), weight_decay=weight_decay)
+optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
 if init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])
 checkpoint = None # free up memory
@@ -295,6 +365,7 @@ if wandb_log and master_process:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
+
 # training loop
 X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
@@ -304,7 +375,6 @@ running_mfu = -1.0
 accuracy = []
 corrects = []
 totals = []
-
 while True:
     
     # determine and set the learning rate for this iteration
@@ -324,6 +394,7 @@ while True:
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
                 "lr": lr,
+                "mfu": running_mfu*100, # convert to percentage
             })
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
@@ -331,7 +402,7 @@ while True:
                 checkpoint = {
                     'model': raw_model.state_dict(),
                     'optimizer': optimizer.state_dict(),
-                    'vocab_size': meta_vocab_size,
+                    'model_args': model_args,
                     'iter_num': iter_num,
                     'best_val_loss': best_val_loss,
                     'config': config,
@@ -339,10 +410,13 @@ while True:
                 print(f"saving checkpoint to {out_dir}")
                 logger.info(f"saving checkpoint to {out_dir}")
                 open_and_append(log_file_name, f"saving checkpoint to {out_dir}")
-                if(num_of_paths == 0):
-                    torch.save(checkpoint, os.path.join(out_dir, f'{iter_num}_ckpt.pt'))
+                
+                # Add embedding configuration to checkpoint filename
+                ckpt_suffix = f"{'_identity' if use_identity_embeddings else ''}{'_nopos' if not use_positional_embeddings else ''}"
+                if num_of_paths == 0:
+                    torch.save(checkpoint, os.path.join(out_dir, f'{iter_num}_ckpt{ckpt_suffix}.pt'))
                 else:
-                    torch.save(checkpoint, os.path.join(out_dir, f'{iter_num}_ckpt_{num_of_paths}.pt'))
+                    torch.save(checkpoint, os.path.join(out_dir, f'{iter_num}_ckpt_{num_of_paths}{ckpt_suffix}.pt'))
 
     if iter_num == 0 and eval_only:
         break
@@ -367,25 +441,4 @@ while True:
     optimizer.zero_grad(set_to_none=True)
 
     # timing and logging
-    t1 = time.time()
-    dt = t1 - t0
-    t0 = t1
-    if iter_num % log_interval == 0 and master_process:
-        lossf = loss.item() * gradient_accumulation_steps
-        if local_iter_num >= 5: # let the training loop settle a bit
-            # Note: Alpine model doesn't have estimate_mfu method, so we skip MFU calculation
-            running_mfu = -1.0
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
-        logger.info(f"iter {iter_num}: loss {lossf:.4f}")
-        open_and_append(log_file_name, f"iter {iter_num}: loss {lossf:.4f}")
-    iter_num += 1
-    local_iter_num += 1
-
-    if iter_num > max_iters:
-        break
-
-torch.save(torch.tensor(corrects).cpu(), os.path.join(out_dir, f'corrects.pt'))
-torch.save(torch.tensor(totals).cpu(), os.path.join(out_dir, f'totals.pt'))
-
-if ddp:
-    destroy_process_group()
+    t1 = time.
