@@ -9,6 +9,9 @@
 /out/
 data/simple_graph/*
 !data/simple_graph/*.py
+data/list/**
+!data/list/*.py
+!data/list/**/*.py
 
 # Ignore visualization files (for now)
 /visualization-scripts/
