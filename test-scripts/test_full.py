@@ -217,6 +217,7 @@ for error_type, count in errors_by_type.items():
 # Add accuracy metrics to the bottom of the file
 with open(output_file, 'a') as f:
     f.write("\n" + "-"*50 + "\n")
+    f.write("SUMMARY OF TEST RESULTS:\n")
     f.write(f"MODEL CONFIGURATION:\n")
     f.write(f"- Checkpoint: {ckpt_iter}\n")
     f.write(f"- Layers: {gptconf.n_layer}\n")
