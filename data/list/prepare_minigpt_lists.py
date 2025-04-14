@@ -154,7 +154,9 @@ meta = {
     'stoi': stoi,
     'min_value': min_value,
     'max_value': max_value,
-    'is_sorted': is_sorted
+    'is_sorted': is_sorted,
+    'simple_format': True,  # Keep this for compatibility
+    'unreachable': False,   # Keep this for compatibility
 }
 
 meta_output = os.path.join(output_dir, 'meta.pkl')
