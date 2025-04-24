@@ -2,22 +2,26 @@ import os
 import random
 import argparse
 
-def generate_random_list(min_value, max_value, min_length, max_length, is_sorted):
+def generate_random_list(min_value, max_value, min_length, max_length, is_sorted, fixed_length=None):
     """
-    Generate a random list of integers with variable length.
+    Generate a random list of integers with variable or fixed length.
     
     Args:
         min_value: Minimum value for generated numbers (inclusive)
         max_value: Maximum value for generated numbers (inclusive)
-        min_length: Minimum length for the generated list
-        max_length: Maximum length for the generated list
+        min_length: Minimum length for the generated list (used if fixed_length is None)
+        max_length: Maximum length for the generated list (used if fixed_length is None)
         is_sorted: Boolean flag indicating if the list should be sorted
+        fixed_length: If provided, all lists will have exactly this length
     
     Returns:
         A random list of integers and its reversed version
     """
     # Determine the length of this particular list
-    length = random.randint(min_length, max_length)
+    if fixed_length is not None:
+        length = fixed_length
+    else:
+        length = random.randint(min_length, max_length)
     
     # Generate the list with unique random numbers
     # If the range is smaller than requested length, limit to range size
@@ -52,7 +56,8 @@ def generate_datasets(args):
             args.max_value, 
             args.min_length, 
             args.max_length,
-            args.is_sorted
+            args.is_sorted,
+            args.fixed_length
         )
         formatted_list = format_list(rand_list, reversed_list)
         all_lists.append(formatted_list)
@@ -90,9 +95,11 @@ if __name__ == "__main__":
     parser.add_argument('--max_value', type=int, default=100, 
                         help='max value for generated numbers -- inclusive')     
     parser.add_argument('--min_length', type=int, default=1, 
-                        help='min length for the generated lists')         
+                        help='min length for the generated lists (when using variable length)')         
     parser.add_argument('--max_length', type=int, default=50, 
-                        help='max length for the generated lists')         
+                        help='max length for the generated lists (when using variable length)')
+    parser.add_argument('--fixed_length', type=int, default=None,
+                        help='If provided, all lists will be this exact length (overrides min/max length)')
     parser.add_argument('--num_list_copies', type=int, default=5, 
                         help='the number of times each list is repeated in the training data.')  
     parser.add_argument('--num_lists', type=int, default=10000, 
@@ -102,11 +109,12 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    # Determine the folder path based on sorted status
+    # Determine the folder path based on sorted status and length type
+    length_type = f"fixed{args.fixed_length}" if args.fixed_length is not None else "variable"
     if args.is_sorted:
-        folder_name = f"data/list/sorted/{args.min_value}-{args.max_value}"
+        folder_name = f"data/list/sorted/{length_type}/{args.min_value}-{args.max_value}"
     else:
-        folder_name = f"data/list/unsorted/{args.min_value}-{args.max_value}"
+        folder_name = f"data/list/unsorted/{length_type}/{args.min_value}-{args.max_value}"
     
     # Create directories if they don't exist
     os.makedirs(folder_name, exist_ok=True)
@@ -121,7 +129,11 @@ if __name__ == "__main__":
     write_dataset(train_lists, train_file)
     write_dataset(val_lists, val_file)
     
-    print(f"Generated:")
+    # Print summary message with length information
+    length_info = f"fixed length of {args.fixed_length}" if args.fixed_length is not None else f"variable length ({args.min_length}-{args.max_length})"
+    sort_info = "sorted" if args.is_sorted else "unsorted"
+    
+    print(f"Generated {sort_info} lists with {length_info}:")
     print(f"- {len(train_lists)} training examples ({len(train_lists)/args.num_list_copies} unique lists × {args.num_list_copies} copies)")
     print(f"- {len(val_lists)} validation examples")
     print(f"Training data saved to: {train_file}")
