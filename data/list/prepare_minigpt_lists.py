@@ -7,7 +7,7 @@ import argparse
 parser = argparse.ArgumentParser(description='Create the dataset based on the given parameters.')  
 parser.add_argument('--min_value', type=int, default=0, help='Min value of numbers in the lists')
 parser.add_argument('--max_value', type=int, default=100, help='Max value of numbers in the lists')
-parser.add_argument('--is_sorted', type=bool, default=True, help='Whether the lists are sorted')
+parser.add_argument('--is_sorted', type=str, default=True, help='Whether the lists are sorted')
 parser.add_argument('--num_list_copies', type=int, default=5, help='Number of copies of each list in training data')
 args = parser.parse_args()  
 
@@ -17,7 +17,7 @@ is_sorted = args.is_sorted
 num_list_copies = args.num_list_copies
 
 # Define paths with list type subdirectory
-list_type = "sorted" if is_sorted else "unsorted"
+list_type = "sorted" if is_sorted == "True" else "unsorted"
 base_dir = os.path.join("data", "list", list_type, f'{min_value}-{max_value}')
 output_dir = base_dir
 

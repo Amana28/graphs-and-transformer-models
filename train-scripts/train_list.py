@@ -42,10 +42,10 @@ parser.add_argument('--n_embd', type=int, default=120, help='Size of the embeddi
 parser.add_argument('--max_iters', type=int, default=10000, help='Number of Iterations (default: 10000)')
 parser.add_argument('--min_value', type=int, default=0, help='Min value in lists')
 parser.add_argument('--max_value', type=int, default=100, help='Max value in lists')
-parser.add_argument('--is_sorted', action='store_true', help='Whether lists are sorted')
+parser.add_argument('--is_sorted', type=str, default="True", help='Whether lists are sorted')
 parser.add_argument('--num_list_copies', type=int, default=5, help='Number of copies per list')
-parser.add_argument('--use_identity_embeddings', action='store_true', help='Use identity matrix for embeddings (default: False)')
-parser.add_argument('--use_positional_embeddings', action='store_false', dest='use_positional_embeddings', help='Use positional embeddings (default: True)')
+parser.add_argument('--use_identity_embeddings', type=bool, default=False, help='Use identity matrix for embeddings (default: False)')
+parser.add_argument('--use_positional_embeddings', type=bool, default=True, help='Use positional embeddings (default: True)')
 
 args = parser.parse_args()
 
@@ -62,7 +62,7 @@ use_identity_embeddings = args.use_identity_embeddings  # Default is False (use 
 use_positional_embeddings = args.use_positional_embeddings  # Default is True (use positional embeddings)
 
 # Determine list type directory
-list_type = "sorted" if is_sorted else "unsorted"
+list_type = "sorted" if is_sorted == "True" else "unsorted"
 data_dir = os.path.join('data', f'{dataset}/{list_type}/{min_value}-{max_value}')
 with open(os.path.join(data_dir, 'meta.pkl'), 'rb') as f:
     meta = pickle.load(f)
@@ -85,7 +85,7 @@ log_suffix = embedding_suffix
 
 # Modify the config to include embedding settings
 config = f"{n_layer}_{n_head}_{n_embd}{embedding_suffix}"
-out_dir = f'out/{dataset}_{config}_{min_value}-{max_value}'
+out_dir = f'out/{dataset}_{list_type}_{config}_{min_value}-{max_value}'
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -127,10 +127,19 @@ device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps'
 dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
 
+
+# -----------------------------------------------------------------------------
+# updated config values
+dropout = 0.1  # Increased from 0.0 for better regularization
+weight_decay = 0.2  # Increased from 0.1 for better regularization
+
+# Print updated config values
+print(f"Using regularization with dropout={dropout} and weight_decay={weight_decay}")
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
+
 
 # various inits, derived attributes, I/O setup
 ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?

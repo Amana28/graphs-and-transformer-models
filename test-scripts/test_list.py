@@ -21,9 +21,10 @@ def parse_args():
     parser.add_argument('--device', type=str, default='cuda:0')
     parser.add_argument('--min_value', type=int, default=0)
     parser.add_argument('--max_value', type=int, default=100)
-    parser.add_argument('--is_sorted', type=bool, default=True, help='Whether lists are sorted')
+    parser.add_argument('--is_sorted', type=str, default="True", help='Whether lists are sorted')
     parser.add_argument('--num_list_copies', type=int, default=5)
     parser.add_argument('--embedding_config', type=str, default='', help='Optional suffix for embedding config')
+    parser.add_argument('--test_samples', type=int, default=-1, help='Number of test samples to evaluate (-1 for all)')
     return parser.parse_args()
 
 def encode(s, stoi):
@@ -73,7 +74,7 @@ def main():
     args = parse_args()
     
     # Determine list type directory
-    list_type = "sorted" if args.is_sorted else "unsorted"
+    list_type = "sorted" if args.is_sorted == "True" else "unsorted"
     embedding_config = args.embedding_config
     full_config = f'{args.config}_{embedding_config}' if embedding_config else args.config
     
@@ -89,7 +90,7 @@ def main():
     max_new_tokens = meta['block_size']
     top_k = len(stoi)
     
-    out_dir = f'out/{args.dataset}_{full_config}_{args.min_value}-{args.max_value}'
+    out_dir = f'out/{args.dataset}_{list_type}_{full_config}_{args.min_value}-{args.max_value}'
     os.makedirs(out_dir, exist_ok=True)
     
     if args.num_list_copies == 0:
@@ -135,10 +136,20 @@ def main():
                 parts = line.split('%')
                 prefix = parts[0].strip() + ' %'  # Include % as prompt ending
                 test_prompts.append(prefix)
+
+    # Limit test samples if specified
+    if args.test_samples > 0 and args.test_samples < len(test_prompts):
+        import random
+        # Set seed for reproducibility
+        random.seed(42)
+        # Randomly sample a subset
+        indices = random.sample(range(len(test_prompts)), args.test_samples)
+        test_prompts = [test_prompts[i] for i in indices]
+        print(f"Limited testing to {args.test_samples} randomly sampled examples")
     
-    # Convert prompts to tensors
+    # Convert prompts to tensors individually (no padding needed - slower)
     encoded_prompts = [encode(p, stoi) for p in test_prompts]
-    encoded_texts = torch.tensor(encoded_prompts, dtype=torch.long, device=args.device)
+    encoded_texts = [torch.tensor(p, dtype=torch.long, device=args.device) for p in encoded_prompts]
     
     # Create output file
     output_file = os.path.join(out_dir, f'list_reversal_{args.ckpt_iter}.txt')
@@ -153,32 +164,35 @@ def main():
         "failed at": {}  # Dictionary to track failures at each position
     }
     
-    # Use appropriate batch size
+    # Use appropriate batch size for tracking purposes
     batch_size = min(100, len(encoded_texts))
     total_samples = len(encoded_texts)
     
     print(f"Testing on {total_samples} examples")
     
-    # Process in batches
+    # Process in batches (modified for individual tensors)
     for i in tqdm(range(0, total_samples, batch_size)):
         # Get batch indices
         end_idx = min(i + batch_size, total_samples)
         batch_size_actual = end_idx - i
         
-        # Get current batch
-        x = encoded_texts[i:end_idx]
-        
-        # Generate completions
-        y = model.generate(x, max_new_tokens, temperature=args.temperature, top_k=top_k)
-        
-        # Decode predictions
-        y_pred = [decode(y[t].tolist(), itos).split('\n')[0] for t in range(batch_size_actual)]
+        # Process each example in the batch
+        y_pred = []
+        for j in range(i, end_idx):
+            # Add batch dimension
+            x = encoded_texts[j].unsqueeze(0)
+            
+            # Generate completion
+            y = model.generate(x, max_new_tokens, temperature=args.temperature, top_k=top_k)
+            
+            # Decode and save
+            y_pred.append(decode(y[0].tolist(), itos).split('\n')[0])
         
         # Evaluate predictions
         with open(output_file, 'a') as f:
-            for t, item in enumerate(y_pred):
+            for j, item in enumerate(y_pred):
                 # The input prompt
-                prompt = test_prompts[i + t]
+                prompt = test_prompts[i + j]
                 
                 # Evaluate
                 error_type, error_idx = check_reversed_list(item)

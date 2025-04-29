@@ -2,22 +2,26 @@ import os
 import random
 import argparse
 
-def generate_random_list(min_value, max_value, min_length, max_length, is_sorted):
+def generate_random_list(min_value, max_value, min_length, max_length, is_sorted, fixed_length=None):
     """
-    Generate a random list of integers with variable length.
+    Generate a random list of integers with variable or fixed length.
     
     Args:
         min_value: Minimum value for generated numbers (inclusive)
         max_value: Maximum value for generated numbers (inclusive)
-        min_length: Minimum length for the generated list
-        max_length: Maximum length for the generated list
+        min_length: Minimum length for the generated list (used if fixed_length is None)
+        max_length: Maximum length for the generated list (used if fixed_length is None)
         is_sorted: Boolean flag indicating if the list should be sorted
+        fixed_length: If provided, all lists will have exactly this length
     
     Returns:
-        A random list of integers and its reversed version
+        A random list of integers
     """
     # Determine the length of this particular list
-    length = random.randint(min_length, max_length)
+    if fixed_length is not None:
+        length = fixed_length
+    else:
+        length = random.randint(min_length, max_length)
     
     # Generate the list with unique random numbers
     # If the range is smaller than requested length, limit to range size
@@ -32,14 +36,62 @@ def generate_random_list(min_value, max_value, min_length, max_length, is_sorted
     if is_sorted:
         rand_list.sort()
     
-    # Create the reversed list
-    reversed_list = list(reversed(rand_list))
-    
-    return rand_list, reversed_list
+    return rand_list
 
-def format_list(rand_list, reversed_list):
+def apply_permutation(input_list, permutation_type="reversal"):
+    """
+    Apply a permutation to the input list based on the specified type.
+    
+    Args:
+        input_list: The original list to permute
+        permutation_type: Type of permutation to apply
+                          "reversal" - simply reverse the list
+                          "random" - apply a random permutation
+                          "cauchy_example" - apply the specific permutation from the Cauchy example
+    
+    Returns:
+        The permuted list
+    """
+    if permutation_type == "reversal":
+        # Simply reverse the list
+        return list(reversed(input_list))
+    
+    elif permutation_type == "random":
+        # Generate a random permutation
+        permutation_indices = list(range(len(input_list)))
+        random.shuffle(permutation_indices)
+        
+        # Apply the permutation
+        permuted_list = [input_list[i] for i in permutation_indices]
+        return permuted_list
+    
+    elif permutation_type == "manual":
+        # The specific Cauchy example permutation: σ(1)=2, σ(2)=6, σ(3)=5, σ(4)=4, σ(5)=3, σ(6)=1
+        # Map: 1→2, 2→6, 3→5, 4→4, 5→3, 6→1
+        # For arbitrary length lists, we'll extend this pattern cyclically
+        
+        # Define the mapping from the Cauchy example (zero-indexed)
+        cauchy_map = {0: 1, 1: 5, 2: 4, 3: 3, 4: 2, 5: 0}
+        
+        # Apply the mapping to each position, cycling for lists longer than 6
+        permuted_list = []
+        for i in range(len(input_list)):
+            mapped_i = cauchy_map.get(i % 6, i)  # Cycle through the map for longer lists
+            if mapped_i < len(input_list):
+                permuted_list.append(input_list[mapped_i])
+            else:
+                # Fallback for edge cases when the mapping is out of bounds
+                permuted_list.append(input_list[i])
+                
+        return permuted_list
+    
+    else:
+        # Default to returning the original list
+        return input_list
+
+def format_list(rand_list, permuted_list):
     """Format the list as a string with a '%' separator."""
-    return " ".join(map(str, rand_list)) + " % " + " ".join(map(str, reversed_list)) + "\n"
+    return " ".join(map(str, rand_list)) + " % " + " ".join(map(str, permuted_list)) + "\n"
 
 def generate_datasets(args):
     """Generate training and validation datasets according to the specified parameters."""
@@ -47,14 +99,19 @@ def generate_datasets(args):
     
     # Generate the requested number of unique lists
     for _ in range(args.num_lists):
-        rand_list, reversed_list = generate_random_list(
+        rand_list = generate_random_list(
             args.min_value, 
             args.max_value, 
             args.min_length, 
             args.max_length,
-            args.is_sorted
+            args.is_sorted,
+            args.fixed_length
         )
-        formatted_list = format_list(rand_list, reversed_list)
+        
+        # Apply the selected permutation
+        permuted_list = apply_permutation(rand_list, args.permutation_type)
+        
+        formatted_list = format_list(rand_list, permuted_list)
         all_lists.append(formatted_list)
     
     # Shuffle the generated lists
@@ -90,23 +147,31 @@ if __name__ == "__main__":
     parser.add_argument('--max_value', type=int, default=100, 
                         help='max value for generated numbers -- inclusive')     
     parser.add_argument('--min_length', type=int, default=1, 
-                        help='min length for the generated lists')         
+                        help='min length for the generated lists (when using variable length)')         
     parser.add_argument('--max_length', type=int, default=50, 
-                        help='max length for the generated lists')         
+                        help='max length for the generated lists (when using variable length)')
+    parser.add_argument('--fixed_length', type=int, default=None,
+                        help='If provided, all lists will be this exact length (overrides min/max length)')
     parser.add_argument('--num_list_copies', type=int, default=5, 
                         help='the number of times each list is repeated in the training data.')  
     parser.add_argument('--num_lists', type=int, default=10000, 
                         help='the total number of generated lists')       
     parser.add_argument('--chance_in_train', type=float, default=0.7, 
                         help='ratio of training set -- the rest is validation')  
+    parser.add_argument('--permutation_type', type=str, default="reversal",
+                        choices=["reversal", "random", "cauchy_example"],
+                        help='Type of permutation to apply (reversal, random, or cauchy_example)')
     
     args = parser.parse_args()
     
-    # Determine the folder path based on sorted status
+    # Determine the folder path based on sorted status and length type
+    length_type = f"fixed{args.fixed_length}" if args.fixed_length is not None else "variable"
+    perm_type = args.permutation_type
+    
     if args.is_sorted:
-        folder_name = f"data/list/sorted/{args.min_value}-{args.max_value}"
+        folder_name = f"data/list/sorted/{length_type}/{args.min_value}-{args.max_value}/{perm_type}"
     else:
-        folder_name = f"data/list/unsorted/{args.min_value}-{args.max_value}"
+        folder_name = f"data/list/unsorted/{length_type}/{args.min_value}-{args.max_value}/{perm_type}"
     
     # Create directories if they don't exist
     os.makedirs(folder_name, exist_ok=True)
@@ -121,7 +186,11 @@ if __name__ == "__main__":
     write_dataset(train_lists, train_file)
     write_dataset(val_lists, val_file)
     
-    print(f"Generated:")
+    # Print summary message with length information
+    length_info = f"fixed length of {args.fixed_length}" if args.fixed_length is not None else f"variable length ({args.min_length}-{args.max_length})"
+    sort_info = "sorted" if args.is_sorted else "unsorted"
+    
+    print(f"Generated {sort_info} lists with {length_info} using {perm_type} permutation:")
     print(f"- {len(train_lists)} training examples ({len(train_lists)/args.num_list_copies} unique lists × {args.num_list_copies} copies)")
     print(f"- {len(val_lists)} validation examples")
     print(f"Training data saved to: {train_file}")
