@@ -39,8 +39,8 @@ def decode(l, itos):
         dec = dec + itos[i] + " "
     return dec[:-1]
 
-def check_permutation(generated, permutation_type="reversal"):
-    """Check if the generated permutation is correct based on the permutation type"""
+def check_permutation_with_expected(generated, expected_output):
+    """Check if the generated permutation matches the expected output"""
     
     # Check if '%' exists in the generated output
     if '%' not in generated:
@@ -51,42 +51,21 @@ def check_permutation(generated, permutation_type="reversal"):
     if len(parts) != 2:
         return "wrong syntax", -1
     
-    input_list = parts[0].strip()
-    output_list = parts[1].strip()
+    # Get the model's output
+    output = parts[1].strip()
     
     # Split into tokens
-    input_tokens = input_list.split()
-    output_tokens = output_list.split()
+    output_tokens = output.split()
+    expected_tokens = expected_output.split()
     
-    # Check if the length matches (input = output)
-    if len(input_tokens) != len(output_tokens):
+    # Check if the length matches
+    if len(output_tokens) != len(expected_tokens):
         return "wrong length", -1
     
-    # Determine expected output based on permutation type
-    if permutation_type == "reversal":
-        expected_output = list(reversed(input_tokens))
-    elif permutation_type == "random":
-        # For random permutation, we cannot verify the expected output
-        # This test file only works for deterministic permutations
-        return "cannot validate random permutation", -1
-    elif permutation_type == "manual":
-        # Apply the manual permutation: σ(1)=2, σ(2)=6, σ(3)=5, σ(4)=4, σ(5)=3, σ(6)=1
-        manual_map = {0: 1, 1: 5, 2: 4, 3: 3, 4: 2, 5: 0}
-        expected_output = []
-        for i in range(len(input_tokens)):
-            mapped_i = manual_map.get(i % 6, i)  # Cycle through the map for longer lists
-            if mapped_i < len(input_tokens):
-                expected_output.append(input_tokens[mapped_i])
-            else:
-                # Fallback for edge cases when the mapping is out of bounds
-                expected_output.append(input_tokens[i])
-    else:
-        return f"unknown permutation type: {permutation_type}", -1
-    
-    # Check if each token in output matches the expected output
-    for i, (expected, actual) in enumerate(zip(expected_output, output_tokens)):
+    # Check if each token matches the expected output
+    for i, (expected, actual) in enumerate(zip(expected_tokens, output_tokens)):
         if expected != actual:
-            return f"failed at {i}", i
+            return f"failed at position {i}", i
     
     return "", -1  # Success
 
@@ -150,6 +129,7 @@ def main():
     print(f"Loading test data from {test_file}...")
     
     test_prompts = []
+    test_expected_outputs = []
     
     with open(test_file, 'r') as f:
         for line in f:
@@ -157,16 +137,19 @@ def main():
             if '%' in line:
                 parts = line.split('%')
                 prefix = parts[0].strip() + ' %'  # Include % as prompt ending
+                expected = parts[1].strip()  # Get the expected output part
                 test_prompts.append(prefix)
+                test_expected_outputs.append(expected)
     
     # Limit test samples if specified
     if args.test_samples > 0 and args.test_samples < len(test_prompts):
         import random
         # Set seed for reproducibility
         random.seed(42)
-        # Randomly sample a subset
+        # Randomly sample a subset - ensure we keep prompts and expected outputs in sync
         indices = random.sample(range(len(test_prompts)), args.test_samples)
         test_prompts = [test_prompts[i] for i in indices]
+        test_expected_outputs = [test_expected_outputs[i] for i in indices]
         print(f"Limited testing to {args.test_samples} randomly sampled examples")
     
     # Convert prompts to tensors individually (no padding needed - slower)
@@ -183,9 +166,7 @@ def main():
     errors_by_type = {
         "wrong syntax": 0,
         "wrong length": 0,
-        "cannot validate random permutation": 0,
-        "unknown permutation type": 0,
-        "failed at": {}  # Dictionary to track failures at each position
+        "failed at position": {}  # Dictionary to track failures at each position
     }
     
     # Use appropriate batch size for tracking purposes
@@ -215,11 +196,13 @@ def main():
         # Evaluate predictions
         with open(output_file, 'a') as f:
             for j, item in enumerate(y_pred):
-                # The input prompt
-                prompt = test_prompts[i + j]
+                # The input prompt and expected output
+                prompt_idx = i + j
+                prompt = test_prompts[prompt_idx]
+                expected_output = test_expected_outputs[prompt_idx]
                 
-                # Evaluate based on permutation type
-                error_type, error_idx = check_permutation(item, args.permutation_type)
+                # Evaluate by comparing with expected output
+                error_type, error_idx = check_permutation_with_expected(item, expected_output)
                 total += 1
                 
                 # Track error types
@@ -229,18 +212,15 @@ def main():
                         errors_by_type["wrong syntax"] += 1
                     elif error_type == "wrong length":
                         errors_by_type["wrong length"] += 1
-                    elif error_type == "cannot validate random permutation":
-                        errors_by_type["cannot validate random permutation"] += 1
-                    elif error_type.startswith("unknown permutation type"):
-                        errors_by_type["unknown permutation type"] += 1
-                    elif "failed at" in error_type:
-                        if error_idx not in errors_by_type["failed at"]:
-                            errors_by_type["failed at"][error_idx] = 0
-                        errors_by_type["failed at"][error_idx] += 1
+                    elif error_type.startswith("failed at position"):
+                        if error_idx not in errors_by_type["failed at position"]:
+                            errors_by_type["failed at position"][error_idx] = 0
+                        errors_by_type["failed at position"][error_idx] += 1
                 
                 # Write to output file
                 f.write(f"Input: {prompt}\n")
-                f.write(f"Output: {item}\n")
+                f.write(f"Expected: {expected_output}\n")
+                f.write(f"Output: {item.split('%')[1].strip() if '%' in item else 'no output'}\n")
                 f.write(f"Error: {error_type}\n\n")
     
     # Calculate accuracy
@@ -257,11 +237,8 @@ def main():
     print("\nError breakdown:")
     print(f"- wrong syntax: {errors_by_type['wrong syntax']}")
     print(f"- wrong length: {errors_by_type['wrong length']}")
-    if args.permutation_type == "random":
-        print(f"- cannot validate random permutation: {errors_by_type['cannot validate random permutation']}")
-    print(f"- unknown permutation type: {errors_by_type['unknown permutation type']}")
     print("- failed at position:")
-    for pos, count in sorted(errors_by_type["failed at"].items()):
+    for pos, count in sorted(errors_by_type["failed at position"].items()):
         percentage = (count / total) * 100
         print(f"  - position {pos}: {count} ({percentage:.2f}%)")
     
@@ -287,11 +264,8 @@ def main():
         f.write("\nError breakdown:\n")
         f.write(f"- wrong syntax: {errors_by_type['wrong syntax']}\n")
         f.write(f"- wrong length: {errors_by_type['wrong length']}\n")
-        if args.permutation_type == "random":
-            f.write(f"- cannot validate random permutation: {errors_by_type['cannot validate random permutation']}\n")
-        f.write(f"- unknown permutation type: {errors_by_type['unknown permutation type']}\n")
         f.write("- failed at position:\n")
-        for pos, count in sorted(errors_by_type["failed at"].items()):
+        for pos, count in sorted(errors_by_type["failed at position"].items()):
             percentage = (count / total) * 100
             f.write(f"  - position {pos}: {count} ({percentage:.2f}%)\n")
     
