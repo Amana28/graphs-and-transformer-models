@@ -38,7 +38,7 @@ def generate_random_list(min_value, max_value, min_length, max_length, is_sorted
     
     return rand_list
 
-def apply_permutation(input_list, permutation_type="reversal"):
+def apply_permutation(input_list, permutation_type="reversal", fixed_indices=None):
     """
     Apply a permutation to the input list based on the specified type.
     
@@ -47,7 +47,8 @@ def apply_permutation(input_list, permutation_type="reversal"):
         permutation_type: Type of permutation to apply
                           "reversal" - simply reverse the list
                           "random" - apply a random permutation
-                          "cauchy_example" - apply the specific permutation from the Cauchy example
+                          "manual" - apply the specific permutation from the manual example
+        fixed_indices: Optional fixed permutation indices to use for "random" type
     
     Returns:
         The permuted list
@@ -57,26 +58,27 @@ def apply_permutation(input_list, permutation_type="reversal"):
         return list(reversed(input_list))
     
     elif permutation_type == "random":
-        # Generate a random permutation
-        permutation_indices = list(range(len(input_list)))
-        random.shuffle(permutation_indices)
-        
-        # Apply the permutation
-        permuted_list = [input_list[i] for i in permutation_indices]
-        return permuted_list
+        # For random permutation with fixed length, use the provided indices
+        if fixed_indices is not None:
+            return [input_list[i] for i in fixed_indices]
+        else:
+            # Fallback to truly random permutation if no fixed indices provided
+            indices = list(range(len(input_list)))
+            random.shuffle(indices)
+            return [input_list[i] for i in indices]
     
     elif permutation_type == "manual":
-        # The specific Cauchy example permutation: σ(1)=2, σ(2)=6, σ(3)=5, σ(4)=4, σ(5)=3, σ(6)=1
+        # The specific manual example permutation: σ(1)=2, σ(2)=6, σ(3)=5, σ(4)=4, σ(5)=3, σ(6)=1
         # Map: 1→2, 2→6, 3→5, 4→4, 5→3, 6→1
         # For arbitrary length lists, we'll extend this pattern cyclically
         
-        # Define the mapping from the Cauchy example (zero-indexed)
-        cauchy_map = {0: 1, 1: 5, 2: 4, 3: 3, 4: 2, 5: 0}
+        # Define the mapping from the manual example (zero-indexed)
+        manual_map = {0: 1, 1: 5, 2: 4, 3: 3, 4: 2, 5: 0}
         
         # Apply the mapping to each position, cycling for lists longer than 6
         permuted_list = []
         for i in range(len(input_list)):
-            mapped_i = cauchy_map.get(i % 6, i)  # Cycle through the map for longer lists
+            mapped_i = manual_map.get(i % 6, i)  # Cycle through the map for longer lists
             if mapped_i < len(input_list):
                 permuted_list.append(input_list[mapped_i])
             else:
@@ -93,7 +95,7 @@ def format_list(rand_list, permuted_list):
     """Format the list as a string with a '%' separator."""
     return " ".join(map(str, rand_list)) + " % " + " ".join(map(str, permuted_list)) + "\n"
 
-def generate_datasets(args):
+def generate_datasets(args, fixed_indices=None):
     """Generate training and validation datasets according to the specified parameters."""
     all_lists = []
     
@@ -109,7 +111,7 @@ def generate_datasets(args):
         )
         
         # Apply the selected permutation
-        permuted_list = apply_permutation(rand_list, args.permutation_type)
+        permuted_list = apply_permutation(rand_list, args.permutation_type, fixed_indices)
         
         formatted_list = format_list(rand_list, permuted_list)
         all_lists.append(formatted_list)
@@ -138,6 +140,11 @@ def write_dataset(dataset, file_path):
         for item in dataset:
             file.write(item)
 
+def save_indices(indices, file_path):
+    """Save the permutation indices to a file for reference."""
+    with open(file_path, "w") as file:
+        file.write(",".join(map(str, indices)))
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate a random list based on the given parameters')      
     parser.add_argument('--is_sorted', type=lambda x: (str(x).lower() == 'true'), default=True, 
@@ -159,10 +166,15 @@ if __name__ == "__main__":
     parser.add_argument('--chance_in_train', type=float, default=0.7, 
                         help='ratio of training set -- the rest is validation')  
     parser.add_argument('--permutation_type', type=str, default="reversal",
-                        choices=["reversal", "random", "cauchy_example"],
-                        help='Type of permutation to apply (reversal, random, or cauchy_example)')
+                        choices=["reversal", "random", "manual"],
+                        help='Type of permutation to apply (reversal, random, or manual)')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for reproducibility')
     
     args = parser.parse_args()
+    
+    # Set random seed for reproducibility
+    random.seed(args.seed)
     
     # Determine the folder path based on sorted status and length type
     length_type = f"fixed{args.fixed_length}" if args.fixed_length is not None else "variable"
@@ -176,8 +188,20 @@ if __name__ == "__main__":
     # Create directories if they don't exist
     os.makedirs(folder_name, exist_ok=True)
     
+    # For random permutation type with fixed length, generate a single set of indices
+    fixed_indices = None
+    if args.permutation_type == "random" and args.fixed_length is not None:
+        # Generate a random permutation of the fixed length
+        fixed_indices = list(range(args.fixed_length))
+        random.shuffle(fixed_indices)
+        
+        # Save the indices to a file for reference
+        indices_file = os.path.join(folder_name, "random_indices.txt")
+        save_indices(fixed_indices, indices_file)
+        print(f"Generated and saved random permutation indices to {indices_file}")
+    
     # Generate datasets
-    train_lists, val_lists = generate_datasets(args)
+    train_lists, val_lists = generate_datasets(args, fixed_indices)
     
     # Write datasets to files
     train_file = os.path.join(folder_name, f'train_{args.num_list_copies}.txt')
@@ -186,6 +210,20 @@ if __name__ == "__main__":
     write_dataset(train_lists, train_file)
     write_dataset(val_lists, val_file)
     
+    # Save the permutation indices in a separate file
+    if args.permutation_type == "random" and fixed_indices is not None:
+        permutation_file = os.path.join(folder_name, "permutation_indices.txt")
+        with open(permutation_file, "w") as f:
+            # Save indices with their positions for better readability
+            for i, idx in enumerate(fixed_indices):
+                f.write(f"{i} -> {idx}\n")
+            
+            # Also save as comma-separated on a single line
+            f.write("\n# Comma-separated format:\n")
+            f.write(",".join(map(str, fixed_indices)))
+        
+        print(f"Detailed permutation mapping saved to: {permutation_file}")
+    
     # Print summary message with length information
     length_info = f"fixed length of {args.fixed_length}" if args.fixed_length is not None else f"variable length ({args.min_length}-{args.max_length})"
     sort_info = "sorted" if args.is_sorted else "unsorted"
@@ -193,5 +231,7 @@ if __name__ == "__main__":
     print(f"Generated {sort_info} lists with {length_info} using {perm_type} permutation:")
     print(f"- {len(train_lists)} training examples ({len(train_lists)/args.num_list_copies} unique lists × {args.num_list_copies} copies)")
     print(f"- {len(val_lists)} validation examples")
+    if args.permutation_type == "random" and fixed_indices is not None:
+        print(f"- Using fixed random permutation indices: {fixed_indices[:10]}...")
     print(f"Training data saved to: {train_file}")
     print(f"Validation data saved to: {val_file}")

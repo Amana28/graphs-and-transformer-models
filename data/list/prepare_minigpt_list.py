@@ -9,16 +9,23 @@ parser.add_argument('--min_value', type=int, default=0, help='Min value of numbe
 parser.add_argument('--max_value', type=int, default=100, help='Max value of numbers in the lists')
 parser.add_argument('--is_sorted', type=str, default=True, help='Whether the lists are sorted')
 parser.add_argument('--num_list_copies', type=int, default=5, help='Number of copies of each list in training data')
+parser.add_argument('--fixed_length', type=int, default=None, help='Fixed length of lists if specified')
+parser.add_argument('--permutation_type', type=str, default="reversal", 
+                    choices=["reversal", "random", "manual"], 
+                    help='Type of permutation to apply')
 args = parser.parse_args()  
 
 min_value = args.min_value
 max_value = args.max_value
 is_sorted = args.is_sorted
 num_list_copies = args.num_list_copies
+permutation_type = args.permutation_type
+fixed_length = args.fixed_length
 
 # Define paths with list type subdirectory
 list_type = "sorted" if is_sorted == "True" else "unsorted"
-base_dir = os.path.join("data", "list", list_type, f'{min_value}-{max_value}')
+length_type = f"fixed{fixed_length}" if fixed_length is not None else "variable"
+base_dir = os.path.join("data", "list", list_type, length_type, f'{min_value}-{max_value}', permutation_type)
 output_dir = base_dir
 
 # Create directory if it doesn't exist
@@ -155,6 +162,8 @@ meta = {
     'min_value': min_value,
     'max_value': max_value,
     'is_sorted': is_sorted,
+    'permutation_type': permutation_type,
+    'fixed_length': fixed_length,
     'simple_format': True,  # Keep this for compatibility
     'unreachable': False,   # Keep this for compatibility
 }
@@ -170,4 +179,4 @@ print(itos)
 with open(meta_output, 'wb') as f:
     pickle.dump(meta, f)
 
-print(f"Processing complete for {'sorted' if is_sorted else 'unsorted'} lists with values from {min_value} to {max_value}.")
+print(f"Processing complete for {'sorted' if is_sorted == 'True' else 'unsorted'} lists with values from {min_value} to {max_value} using {permutation_type} permutation.")

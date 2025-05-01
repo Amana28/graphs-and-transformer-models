@@ -1,9 +1,7 @@
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from model.updated_model import GPTConfig, GPT 
-
 import numpy as np
 import argparse
 import pickle
@@ -25,6 +23,9 @@ def parse_args():
     parser.add_argument('--num_list_copies', type=int, default=5)
     parser.add_argument('--embedding_config', type=str, default='', help='Optional suffix for embedding config')
     parser.add_argument('--test_samples', type=int, default=-1, help='Number of test samples to evaluate (-1 for all)')
+    parser.add_argument('--fixed_length', type=int, default=None, help='Fixed length of lists if specified')
+    parser.add_argument('--permutation_type', type=str, default="reversal", 
+                        help='Type of permutation to apply (reversal, random, manual)')
     return parser.parse_args()
 
 def encode(s, stoi):
@@ -38,8 +39,8 @@ def decode(l, itos):
         dec = dec + itos[i] + " "
     return dec[:-1]
 
-def check_reversed_list(generated):
-    """Check if the generated reversed list is correct"""
+def check_permutation(generated, permutation_type="reversal"):
+    """Check if the generated permutation is correct based on the permutation type"""
     
     # Check if '%' exists in the generated output
     if '%' not in generated:
@@ -61,9 +62,28 @@ def check_reversed_list(generated):
     if len(input_tokens) != len(output_tokens):
         return "wrong length", -1
     
-    # Check if each token in output is the reverse of input
-    expected_output = list(reversed(input_tokens))
+    # Determine expected output based on permutation type
+    if permutation_type == "reversal":
+        expected_output = list(reversed(input_tokens))
+    elif permutation_type == "random":
+        # For random permutation, we cannot verify the expected output
+        # This test file only works for deterministic permutations
+        return "cannot validate random permutation", -1
+    elif permutation_type == "manual":
+        # Apply the manual permutation: σ(1)=2, σ(2)=6, σ(3)=5, σ(4)=4, σ(5)=3, σ(6)=1
+        manual_map = {0: 1, 1: 5, 2: 4, 3: 3, 4: 2, 5: 0}
+        expected_output = []
+        for i in range(len(input_tokens)):
+            mapped_i = manual_map.get(i % 6, i)  # Cycle through the map for longer lists
+            if mapped_i < len(input_tokens):
+                expected_output.append(input_tokens[mapped_i])
+            else:
+                # Fallback for edge cases when the mapping is out of bounds
+                expected_output.append(input_tokens[i])
+    else:
+        return f"unknown permutation type: {permutation_type}", -1
     
+    # Check if each token in output matches the expected output
     for i, (expected, actual) in enumerate(zip(expected_output, output_tokens)):
         if expected != actual:
             return f"failed at {i}", i
@@ -73,13 +93,14 @@ def check_reversed_list(generated):
 def main():
     args = parse_args()
     
-    # Determine list type directory
+    # Determine list type directory and path structure
     list_type = "sorted" if args.is_sorted == "True" else "unsorted"
     embedding_config = args.embedding_config
     full_config = f'{args.config}_{embedding_config}' if embedding_config else args.config
     
-    # Define paths
-    data_path = f'data/{args.dataset}/{list_type}/{args.min_value}-{args.max_value}'
+    # Define paths with new directory structure
+    length_type = f"fixed{args.fixed_length}" if args.fixed_length is not None else "variable"
+    data_path = f'data/{args.dataset}/{list_type}/{length_type}/{args.min_value}-{args.max_value}/{args.permutation_type}'
     meta_path = f'{data_path}/meta.pkl'
     
     print(f"Loading meta from {meta_path}...")
@@ -90,7 +111,8 @@ def main():
     max_new_tokens = meta['block_size']
     top_k = len(stoi)
     
-    out_dir = f'out/{args.dataset}_{list_type}_{full_config}_{args.min_value}-{args.max_value}'
+    # Updated output directory structure
+    out_dir = f'out/{args.dataset}_{list_type}_{length_type}_{args.permutation_type}_{full_config}_{args.min_value}-{args.max_value}'
     os.makedirs(out_dir, exist_ok=True)
     
     if args.num_list_copies == 0:
@@ -118,13 +140,13 @@ def main():
     print(f"- Embedding dim: {gptconf.n_embd}")
     print(f"- Using identity embeddings: {getattr(gptconf, 'use_identity_embeddings', False)}")
     print(f"- Using positional embeddings: {getattr(gptconf, 'use_positional_embeddings', True)}")
+    print(f"- Testing with permutation type: {args.permutation_type}")
     
     model.eval()
     model.to(args.device)
     
     # Load test data
-    typedata = 'test'
-    test_file = f'{data_path}/{typedata}.txt'
+    test_file = f'{data_path}/test.txt'
     print(f"Loading test data from {test_file}...")
     
     test_prompts = []
@@ -136,7 +158,7 @@ def main():
                 parts = line.split('%')
                 prefix = parts[0].strip() + ' %'  # Include % as prompt ending
                 test_prompts.append(prefix)
-
+    
     # Limit test samples if specified
     if args.test_samples > 0 and args.test_samples < len(test_prompts):
         import random
@@ -152,7 +174,7 @@ def main():
     encoded_texts = [torch.tensor(p, dtype=torch.long, device=args.device) for p in encoded_prompts]
     
     # Create output file
-    output_file = os.path.join(out_dir, f'list_reversal_{args.ckpt_iter}.txt')
+    output_file = os.path.join(out_dir, f'list_{args.permutation_type}_{args.ckpt_iter}.txt')
     with open(output_file, 'w') as f:
         pass
     
@@ -161,6 +183,8 @@ def main():
     errors_by_type = {
         "wrong syntax": 0,
         "wrong length": 0,
+        "cannot validate random permutation": 0,
+        "unknown permutation type": 0,
         "failed at": {}  # Dictionary to track failures at each position
     }
     
@@ -194,8 +218,8 @@ def main():
                 # The input prompt
                 prompt = test_prompts[i + j]
                 
-                # Evaluate
-                error_type, error_idx = check_reversed_list(item)
+                # Evaluate based on permutation type
+                error_type, error_idx = check_permutation(item, args.permutation_type)
                 total += 1
                 
                 # Track error types
@@ -205,6 +229,10 @@ def main():
                         errors_by_type["wrong syntax"] += 1
                     elif error_type == "wrong length":
                         errors_by_type["wrong length"] += 1
+                    elif error_type == "cannot validate random permutation":
+                        errors_by_type["cannot validate random permutation"] += 1
+                    elif error_type.startswith("unknown permutation type"):
+                        errors_by_type["unknown permutation type"] += 1
                     elif "failed at" in error_type:
                         if error_idx not in errors_by_type["failed at"]:
                             errors_by_type["failed at"][error_idx] = 0
@@ -221,14 +249,17 @@ def main():
     
     print(f"\nTest Results:")
     print(f"Total samples: {total}")
-    print(f"Correct reversals: {total - wrong}")
-    print(f"Incorrect reversals: {wrong}")
+    print(f"Correct permutations: {total - wrong}")
+    print(f"Incorrect permutations: {wrong}")
     print(f"Accuracy: {accuracy:.2f}%")
     print(f"Error Rate: {error_rate:.2f}%")
     
     print("\nError breakdown:")
     print(f"- wrong syntax: {errors_by_type['wrong syntax']}")
     print(f"- wrong length: {errors_by_type['wrong length']}")
+    if args.permutation_type == "random":
+        print(f"- cannot validate random permutation: {errors_by_type['cannot validate random permutation']}")
+    print(f"- unknown permutation type: {errors_by_type['unknown permutation type']}")
     print("- failed at position:")
     for pos, count in sorted(errors_by_type["failed at"].items()):
         percentage = (count / total) * 100
@@ -245,16 +276,20 @@ def main():
         f.write(f"- Embedding dim: {gptconf.n_embd}\n")
         f.write(f"- Using identity embeddings: {getattr(gptconf, 'use_identity_embeddings', False)}\n")
         f.write(f"- Using positional embeddings: {getattr(gptconf, 'use_positional_embeddings', True)}\n")
+        f.write(f"- Permutation type: {args.permutation_type}\n")
         f.write("\n")
         f.write(f"TEST RESULTS:\n")
         f.write(f"Total samples: {total}\n")
-        f.write(f"Correct reversals: {total - wrong}\n")
-        f.write(f"Incorrect reversals: {wrong}\n")
+        f.write(f"Correct permutations: {total - wrong}\n")
+        f.write(f"Incorrect permutations: {wrong}\n")
         f.write(f"Accuracy: {accuracy:.2f}%\n")
         f.write(f"Error Rate: {error_rate:.2f}%\n")
         f.write("\nError breakdown:\n")
         f.write(f"- wrong syntax: {errors_by_type['wrong syntax']}\n")
         f.write(f"- wrong length: {errors_by_type['wrong length']}\n")
+        if args.permutation_type == "random":
+            f.write(f"- cannot validate random permutation: {errors_by_type['cannot validate random permutation']}\n")
+        f.write(f"- unknown permutation type: {errors_by_type['unknown permutation type']}\n")
         f.write("- failed at position:\n")
         for pos, count in sorted(errors_by_type["failed at"].items()):
             percentage = (count / total) * 100
