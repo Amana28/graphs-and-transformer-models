@@ -166,6 +166,8 @@ def main():
     errors_by_type = {
         "wrong syntax": 0,
         "wrong length": 0,
+        "cannot validate random permutation": 0,
+        "unknown permutation type": 0,
         "failed at position": {}  # Dictionary to track failures at each position
     }
     
@@ -212,16 +214,21 @@ def main():
                         errors_by_type["wrong syntax"] += 1
                     elif error_type == "wrong length":
                         errors_by_type["wrong length"] += 1
+                    elif error_type.startswith("cannot validate"):
+                        errors_by_type["cannot validate random permutation"] += 1
+                    elif error_type.startswith("unknown permutation type"):
+                        errors_by_type["unknown permutation type"] += 1
                     elif error_type.startswith("failed at position"):
                         if error_idx not in errors_by_type["failed at position"]:
                             errors_by_type["failed at position"][error_idx] = 0
                         errors_by_type["failed at position"][error_idx] += 1
                 
-                # Write to output file
-                f.write(f"Input: {prompt}\n")
-                f.write(f"Expected: {expected_output}\n")
-                f.write(f"Output: {item.split('%')[1].strip() if '%' in item else 'no output'}\n")
-                f.write(f"Error: {error_type}\n\n")
+                # Write to output file in the new format
+                output_part = item.split('%')[1].strip() if '%' in item else 'no output'
+                error_msg = f"  {error_type}" if error_type else ""  # include two spaces before error message
+                
+                # Format: input % output  error
+                f.write(f"{prompt} {output_part}{error_msg}\n")
     
     # Calculate accuracy
     accuracy = (total - wrong) / total * 100 if total > 0 else 0
@@ -237,6 +244,8 @@ def main():
     print("\nError breakdown:")
     print(f"- wrong syntax: {errors_by_type['wrong syntax']}")
     print(f"- wrong length: {errors_by_type['wrong length']}")
+    print(f"- cannot validate random permutation: {errors_by_type['cannot validate random permutation']}")
+    print(f"- unknown permutation type: {errors_by_type['unknown permutation type']}")
     print("- failed at position:")
     for pos, count in sorted(errors_by_type["failed at position"].items()):
         percentage = (count / total) * 100
@@ -264,6 +273,8 @@ def main():
         f.write("\nError breakdown:\n")
         f.write(f"- wrong syntax: {errors_by_type['wrong syntax']}\n")
         f.write(f"- wrong length: {errors_by_type['wrong length']}\n")
+        f.write(f"- cannot validate random permutation: {errors_by_type['cannot validate random permutation']}\n")
+        f.write(f"- unknown permutation type: {errors_by_type['unknown permutation type']}\n")
         f.write("- failed at position:\n")
         for pos, count in sorted(errors_by_type["failed at position"].items()):
             percentage = (count / total) * 100
