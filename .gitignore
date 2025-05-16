@@ -19,4 +19,7 @@ data/list/**
 # Ignore __pycache__ directories
 __pycache__/
 
+# Ignore files with access tokens
+helpful/upload_to_huggingface.py
+
 

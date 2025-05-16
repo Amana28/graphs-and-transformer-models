@@ -2,7 +2,7 @@ import os
 import random
 import argparse
 
-def generate_random_list(min_value, max_value, min_length, max_length, is_sorted, fixed_length=None):
+def generate_random_list(min_value, max_value, min_length, max_length, is_sorted, fixed_length=None, only_min_max_length=False):
     """
     Generate a random list of integers with variable or fixed length.
     
@@ -13,6 +13,8 @@ def generate_random_list(min_value, max_value, min_length, max_length, is_sorted
         max_length: Maximum length for the generated list (used if fixed_length is None)
         is_sorted: Boolean flag indicating if the list should be sorted
         fixed_length: If provided, all lists will have exactly this length
+        only_min_max_length: If True, length will be randomly chosen between min_length and max_length only
+                            (not any values in between)
     
     Returns:
         A random list of integers
@@ -20,6 +22,9 @@ def generate_random_list(min_value, max_value, min_length, max_length, is_sorted
     # Determine the length of this particular list
     if fixed_length is not None:
         length = fixed_length
+    elif only_min_max_length:
+        # Choose randomly between min_length and max_length only
+        length = random.choice([min_length, max_length])
     else:
         length = random.randint(min_length, max_length)
     
@@ -107,7 +112,8 @@ def generate_datasets(args, fixed_indices=None):
             args.min_length, 
             args.max_length,
             args.is_sorted,
-            args.fixed_length
+            args.fixed_length,
+            args.only_min_max_length
         )
         
         # Apply the selected permutation
@@ -159,6 +165,8 @@ if __name__ == "__main__":
                         help='max length for the generated lists (when using variable length)')
     parser.add_argument('--fixed_length', type=int, default=None,
                         help='If provided, all lists will be this exact length (overrides min/max length)')
+    parser.add_argument('--only_min_max_length', type=lambda x: (str(x).lower() == 'true'), default=False,
+                        help='If True, randomly choose between min_length and max_length only (not values in between)')
     parser.add_argument('--num_list_copies', type=int, default=5, 
                         help='the number of times each list is repeated in the training data.')  
     parser.add_argument('--num_lists', type=int, default=10000, 
@@ -226,6 +234,8 @@ if __name__ == "__main__":
     
     # Print summary message with length information
     length_info = f"fixed length of {args.fixed_length}" if args.fixed_length is not None else f"variable length ({args.min_length}-{args.max_length})"
+    if args.only_min_max_length and args.fixed_length is None:
+        length_info = f"only {args.min_length} or {args.max_length} length"
     sort_info = "sorted" if args.is_sorted else "unsorted"
     
     print(f"Generated {sort_info} lists with {length_info} using {perm_type} permutation:")
