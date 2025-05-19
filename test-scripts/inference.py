@@ -127,7 +127,7 @@ def main():
     print("=" * 60)
     for prompt, output in results:
         print(f"Input:  {prompt}")
-        print(f"Output: {output}")
+        print(f"Input + Output: {output}")
         print("-" * 60)
 
 if __name__ == "__main__":
