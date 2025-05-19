@@ -126,8 +126,8 @@ def main():
     print("\nInference Results:")
     print("=" * 60)
     for prompt, output in results:
-        print(f"Input:  {prompt}")
-        print(f"Input + Output: {output}")
+        print(f"Input: {prompt}")
+        print(f"Input+Output: {output}")
         print("-" * 60)
 
 if __name__ == "__main__":
