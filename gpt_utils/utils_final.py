@@ -16,7 +16,7 @@ from torch.nn import (
     Sequential,
 )
 
-from scale_dot_product_gpa import scaled_dot_product_gqa
+from gpt_utils.scale_dot_product_gpa import scaled_dot_product_gqa
 import seaborn as sns
 import matplotlib.pyplot as plt
 import torch

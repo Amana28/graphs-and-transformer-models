@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Now we can import model
-from model import GPTConfig, GPT
+from updated_model import GPTConfig, GPT
 
 def main():
     parser = argparse.ArgumentParser(description="Inspect model architecture")
