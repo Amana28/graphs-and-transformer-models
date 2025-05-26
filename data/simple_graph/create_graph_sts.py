@@ -192,10 +192,10 @@ if __name__ == "__main__":
     print('number of source target pairs:', len(test_set))
 
     # Write original st format datasets
-    write_dataset_original(train_set, os.path.join(os.path.dirname(__file__), f'{num_nodes}/train_{num_of_paths}.txt') )
-    write_dataset_original(test_set, os.path.join(os.path.dirname(__file__),  f'{num_nodes}/test.txt') )
-    
+    write_dataset_original(train_set, os.path.join(folder_name, f'train_{num_of_paths}.txt') )
+    write_dataset_original(test_set, os.path.join(folder_name, 'test.txt') )
+
     # Write sts format datasets
-    write_dataset_sts(train_set, os.path.join(os.path.dirname(__file__), f'{num_nodes}/train_sts_{num_of_paths}.txt') )
-    write_dataset_sts(test_set, os.path.join(os.path.dirname(__file__),  f'{num_nodes}/test_sts.txt') )
-    nx.write_graphml(random_digraph, os.path.join(os.path.dirname(__file__), f'{num_nodes}/path_graph.graphml') )
+    write_dataset_sts(train_set, os.path.join(folder_name, f'train_sts_{num_of_paths}.txt') )
+    write_dataset_sts(test_set, os.path.join(folder_name, 'test_sts.txt') )
+    nx.write_graphml(random_digraph, os.path.join(folder_name, 'path_graph.graphml') )

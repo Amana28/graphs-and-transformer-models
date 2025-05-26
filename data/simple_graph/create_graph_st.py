@@ -175,8 +175,8 @@ if __name__ == "__main__":
     obtain_stats(train_set)
     print('number of source target pairs:', len(test_set))
 
-    write_dataset(train_set, os.path.join(os.path.dirname(__file__), f'{num_nodes}/train_{num_of_paths}.txt') )
-    write_dataset(test_set, os.path.join(os.path.dirname(__file__),  f'{num_nodes}/test.txt') )
-    nx.write_graphml(random_digraph, os.path.join(os.path.dirname(__file__), f'{num_nodes}/path_graph.graphml') )
+    write_dataset(train_set, os.path.join(folder_name, f'train_{num_of_paths}.txt') )
+    write_dataset(test_set, os.path.join(folder_name, 'test.txt') )
+    nx.write_graphml(random_digraph, os.path.join(folder_name, 'path_graph.graphml') )
 
     
