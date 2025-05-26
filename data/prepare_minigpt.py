@@ -8,25 +8,42 @@ parser = argparse.ArgumentParser(description='Create the dataset based on the gi
 parser.add_argument('--num_nodes', type=int, default=100, help='Number of nodes in the graph')  
 parser.add_argument('--num_of_paths', type=int, default=20, help='Number of paths per pair nodes in training dataset')
 parser.add_argument('--graph_type', type=str, default='simple_graph', help='Type of graph: simple_graph, line, circle, etc...')
+parser.add_argument('--task_type', type=str, default='st', choices=['st', 'sts'], help='Task type: st or sts')
 args = parser.parse_args()  
 
 num_nodes = args.num_nodes
 graph_type = args.graph_type
+task_type = args.task_type
 
-# Define paths with graph type subdirectory
-base_dir = os.path.join("data", graph_type, f'{args.num_nodes}')
+# Define paths with graph type subdirectories (and task type only for simple_graph)
+if graph_type == 'simple_graph':
+    base_dir = os.path.join("data", graph_type, task_type, f'{args.num_nodes}')
+else:
+    base_dir = os.path.join("data", graph_type, f'{args.num_nodes}')
 output_dir = base_dir
 
 # Create directory if it doesn't exist
 os.makedirs(output_dir, exist_ok=True)
 
-if(args.num_of_paths == 0):
-    train_file_path = os.path.join(base_dir, 'train.txt')
-    val_file_path = os.path.join(base_dir, 'test.txt')
+# Determine which files to process based on task type (only relevant for simple_graph)
+if graph_type == 'simple_graph' and task_type == 'sts':
+    # For STS, use the sts-specific files
+    if(args.num_of_paths == 0):
+        train_file_path = os.path.join(base_dir, 'train_sts.txt')
+        val_file_path = os.path.join(base_dir, 'test_sts.txt')
+    else:
+        train_file_path = os.path.join(base_dir, f'train_sts_{args.num_of_paths}.txt')
+        val_file_path = os.path.join(base_dir, 'test_sts.txt')
 else:
-    train_file_path = os.path.join(base_dir, f'train_{args.num_of_paths}.txt')
-    val_file_path = os.path.join(base_dir, 'test.txt')
+    # For ST or other graph types, use the original files
+    if(args.num_of_paths == 0):
+        train_file_path = os.path.join(base_dir, 'train.txt')
+        val_file_path = os.path.join(base_dir, 'test.txt')
+    else:
+        train_file_path = os.path.join(base_dir, f'train_{args.num_of_paths}.txt')
+        val_file_path = os.path.join(base_dir, 'test.txt')
 
+print(f"Processing {task_type.upper() if graph_type == 'simple_graph' else 'standard'} task for {graph_type}")
 print(f"Loading training data from: {train_file_path}")
 print(f"Loading validation data from: {val_file_path}")
 
@@ -117,13 +134,21 @@ print(f"val has {len(val_ids):,} tokens")
 train_ids = np.array(train_ids, dtype=np.uint16)
 val_ids = np.array(val_ids, dtype=np.uint16)
 
-# Define output files
-if(args.num_of_paths == 0):
-    train_output = os.path.join(output_dir, 'train.bin')
-    val_output = os.path.join(output_dir, 'val.bin')
+# Define output files based on task type (only for simple_graph)
+if graph_type == 'simple_graph' and task_type == 'sts':
+    if(args.num_of_paths == 0):
+        train_output = os.path.join(output_dir, 'train_sts.bin')
+        val_output = os.path.join(output_dir, 'val_sts.bin')
+    else:
+        train_output = os.path.join(output_dir, f'train_sts_{args.num_of_paths}.bin')
+        val_output = os.path.join(output_dir, 'val_sts.bin')
 else:
-    train_output = os.path.join(output_dir, f'train_{args.num_of_paths}.bin')
-    val_output = os.path.join(output_dir, 'val.bin')
+    if(args.num_of_paths == 0):
+        train_output = os.path.join(output_dir, 'train.bin')
+        val_output = os.path.join(output_dir, 'val.bin')
+    else:
+        train_output = os.path.join(output_dir, f'train_{args.num_of_paths}.bin')
+        val_output = os.path.join(output_dir, 'val.bin')
 
 print(f"Saving training data to: {train_output}")
 print(f"Saving validation data to: {val_output}")
@@ -145,6 +170,7 @@ meta = {
     'vocab_size': vocab_size,
     'itos': itos,
     'stoi': stoi,
+    'task_type': task_type if graph_type == 'simple_graph' else None,  # Add task type to metadata only for simple_graph
 }
 
 meta_output = os.path.join(output_dir, 'meta.pkl')
@@ -155,4 +181,5 @@ print(itos)
 with open(meta_output, 'wb') as f:
     pickle.dump(meta, f)
 
-print(f"Processing complete for {graph_type} graph with {num_nodes} nodes.")
+task_suffix = f" using {task_type.upper()} task format" if graph_type == 'simple_graph' else ""
+print(f"Processing complete for {graph_type} graph with {num_nodes} nodes{task_suffix}.")
