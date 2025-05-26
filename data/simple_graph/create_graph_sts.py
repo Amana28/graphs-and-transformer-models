@@ -167,7 +167,7 @@ if __name__ == "__main__":
     random_digraph = generate_random_directed_graph(num_nodes, edge_prob)
     reachability, feasible_pairs = obtain_reachability()
 
-    folder_name = os.path.join(os.path.dirname(__file__), f'{num_nodes}')
+    folder_name = os.path.join(os.path.dirname(__file__), 'sts', f'{num_nodes}')
     if not os.path.exists(folder_name):  
         os.makedirs(folder_name)
 
