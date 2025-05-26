@@ -122,22 +122,30 @@ def obtain_stats(dataset):
     for ii in range(3, len(len_stats)):
         print(f'There are {len_stats[ii]} paths with length {ii-3}')
 
-def format_data(data):
+def format_data_original(data):
+    return f"{data[0]} {data[1]} " + ' '.join(str(num) for num in data[2:])  + '\n'
+
+def format_data_sts(data):
     # Extract the path (everything after source and target)
     path = data[2:]
-    # Create reverse path (full reverse including all nodes)
-    reverse_path = path[::-1]
+    # Create reverse path (full reverse excluding the target to avoid duplication)
+    reverse_path = path[:-1][::-1] if len(path) > 1 else []
     
-    # Format: sts + st_path + reverse
+    # Format: source target source path reverse_path
     forward_part = f"{data[0]} {data[1]} {data[0]} " + ' '.join(str(num) for num in path)
-    reverse_part = ' ' + ' '.join(str(num) for num in reverse_path)
+    reverse_part = ' ' + ' '.join(str(num) for num in reverse_path) if reverse_path else ''
     
     return forward_part + reverse_part + '\n'
         
-def write_dataset(dataset, file_name):
+def write_dataset_original(dataset, file_name):
     with open(file_name, "w") as file:
         for data in dataset:
-            file.write(format_data(data))
+            file.write(format_data_original(data))
+
+def write_dataset_sts(dataset, file_name):
+    with open(file_name, "w") as file:
+        for data in dataset:
+            file.write(format_data_sts(data))
 
 
 if __name__ == "__main__":  
@@ -183,6 +191,11 @@ if __name__ == "__main__":
     obtain_stats(train_set)
     print('number of source target pairs:', len(test_set))
 
-    write_dataset(train_set, os.path.join(os.path.dirname(__file__), f'{num_nodes}/train_{num_of_paths}.txt') )
-    write_dataset(test_set, os.path.join(os.path.dirname(__file__),  f'{num_nodes}/test.txt') )
+    # Write original st format datasets
+    write_dataset_original(train_set, os.path.join(os.path.dirname(__file__), f'{num_nodes}/train_{num_of_paths}.txt') )
+    write_dataset_original(test_set, os.path.join(os.path.dirname(__file__),  f'{num_nodes}/test.txt') )
+    
+    # Write sts format datasets
+    write_dataset_sts(train_set, os.path.join(os.path.dirname(__file__), f'{num_nodes}/train_sts_{num_of_paths}.txt') )
+    write_dataset_sts(test_set, os.path.join(os.path.dirname(__file__),  f'{num_nodes}/test_sts.txt') )
     nx.write_graphml(random_digraph, os.path.join(os.path.dirname(__file__), f'{num_nodes}/path_graph.graphml') )
