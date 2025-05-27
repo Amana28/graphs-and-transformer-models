@@ -49,7 +49,7 @@ def check_sts_path(G, gen_str, itos):
 
     for node in path:
         if int(node) > len(itos) or int(node) < 0:
-            return 'incorrect path'
+            return 'invalid input'
     
     source = path[0]
     target = path[1]
