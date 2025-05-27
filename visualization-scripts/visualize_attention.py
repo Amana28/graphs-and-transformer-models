@@ -111,12 +111,90 @@ class ModelWithAttention(GPT):
 
 def visualize_attention_inline(model_path, meta_path, input_text, heads=[0], layers=[0], device='cuda'):
     """
-    Main function to visualize attention patterns inline in a notebook.
+    Main function to visualize attention patterns inline in a notebook for a single input.
+    """
+    # Load model
+    print(f"Loading model from {model_path}...")
+    checkpoint = torch.load(model_path, map_location=device)
+    
+    # Create model from checkpoint  
+    if 'model_args' in checkpoint:
+        gptconf = GPTConfig(**checkpoint['model_args'])
+        model = ModelWithAttention(gptconf)
+        state_dict = checkpoint['model'] if 'model' in checkpoint else checkpoint
+    else:
+        raise ValueError("Checkpoint format not recognized")
+    
+    # Clean up state dict if needed
+    unwanted_prefix = '_orig_mod.'
+    for k, v in list(state_dict.items()):
+        if k.startswith(unwanted_prefix):
+            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+    
+    model.load_state_dict(state_dict)
+    model = model.to(device)
+    model.eval()
+    
+    # Load vocabulary
+    print(f"Loading vocabulary from {meta_path}...")
+    with open(meta_path, 'rb') as f:
+        meta = pickle.load(f)
+    stoi, itos = meta['stoi'], meta['itos']
+    
+    # Encode the input
+    tokens = []
+    for token in input_text.split():
+        if token in stoi:
+            tokens.append(stoi[token])
+        else:
+            print(f"Warning: Token '{token}' not found in vocabulary")
+    
+    input_tensor = torch.tensor([tokens], dtype=torch.long).to(device)
+    
+    # Run model with attention weights
+    with torch.no_grad():
+        _, _, attention_weights = model(input_tensor, return_attn_weights=True)
+    
+    # Visualize attention patterns
+    for layer_idx in layers:
+        if layer_idx < len(attention_weights):
+            layer_weights = attention_weights[layer_idx]
+            for head_idx in heads:
+                if head_idx < layer_weights.shape[1]:
+                    # Create plot
+                    plt.figure(figsize=(12, 10))
+                    attn_matrix = layer_weights[0, head_idx].cpu().numpy()
+                    
+                    # Get sequence length and tokens from input_text
+                    tokens_list = input_text.split()
+                    seq_length = len(tokens_list)
+                    
+                    # Create the heatmap
+                    sns.heatmap(attn_matrix, cmap="viridis", cbar=True, square=True, annot=False)
+                    
+                    # Update the title to show sequence length
+                    plt.title(f"Attention Plot - Sequence length {seq_length}", fontsize=14)
+                    
+                    # Set the ticks to the actual tokens
+                    plt.xticks(np.arange(len(tokens_list)) + 0.5, tokens_list, rotation=45)
+                    plt.yticks(np.arange(len(tokens_list)) + 0.5, tokens_list)
+                    
+                    plt.xlabel("Key Tokens", fontsize=12)
+                    plt.ylabel("Query Tokens", fontsize=12)
+                    
+                    # Display inline
+                    display(plt.gcf())
+                    plt.close()
+
+def visualize_average_attention_inline(model_path, meta_path, test_file_path, test_length, heads=[0], layers=[0], device='cuda'):
+    """
+    Main function to visualize average attention patterns for inputs of a specific length from a test file.
     
     Args:
         model_path: Path to the model checkpoint
         meta_path: Path to the meta.pkl file with vocabulary
-        input_text: Text to analyze
+        test_file_path: Path to the test file containing multiple inputs
+        test_length: Target sequence length to filter and average over
         heads: List of attention heads to visualize
         layers: List of transformer layers to visualize
         device: Device to run on ('cuda' or 'cpu')
@@ -149,85 +227,102 @@ def visualize_attention_inline(model_path, meta_path, input_text, heads=[0], lay
         meta = pickle.load(f)
     stoi, itos = meta['stoi'], meta['itos']
     
-    # Create temporary files needed by the visualizer
-    with tempfile.TemporaryDirectory() as temp_dir:
-        # Create a test file with the input text
-        test_file = os.path.join(temp_dir, "test.txt")
-        with open(test_file, "w") as f:
-            f.write(input_text)
+    # Load and filter test inputs by length
+    print(f"Loading test inputs from {test_file_path}...")
+    test_inputs = []
+    with open(test_file_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                tokens = line.split()
+                if len(tokens) == test_length:
+                    test_inputs.append(line)
+    
+    print(f"Found {len(test_inputs)} inputs with length {test_length}")
+    
+    if len(test_inputs) == 0:
+        print(f"No inputs found with length {test_length}")
+        return
+    
+    # Initialize attention accumulators
+    attention_accumulators = {}
+    
+    # Process each test input
+    print("Processing test inputs...")
+    for i, input_text in enumerate(test_inputs):
+        if i % 10 == 0:
+            print(f"Processing input {i+1}/{len(test_inputs)}")
         
-        print(f"Created temporary test file with content: {input_text}")
+        # Encode the input
+        tokens = []
+        valid_input = True
+        for token in input_text.split():
+            if token in stoi:
+                tokens.append(stoi[token])
+            else:
+                print(f"Warning: Token '{token}' not found in vocabulary, skipping input")
+                valid_input = False
+                break
         
-        try:
-            # Initialize the visualizer
-            print("Initializing AttentionVisualizer...")
-            visualizer = AttentionVisualizer(
-                model=model,
-                tokenizer=None,
-                out_dir=temp_dir,
-                test_path=test_file,
-                meta_path=meta_path
-            )
-            
-            # Override the plot_attention method to display inline
-            original_plot = visualizer.plot_attention
-            
-            def plot_inline(self, attn_matrix, head=0, layer=0, path_length=0):
-                print(f"Creating plot for head {head}, layer {layer}, path length {path_length}")
-                plt.figure(figsize=(12, 10))
-                sns.heatmap(attn_matrix, cmap="viridis", cbar=True, square=True, annot=False)
-                plt.xlabel("Key Tokens", fontsize=12)
-                plt.ylabel("Query Tokens", fontsize=12)
-                plt.title(f"Attention Head {head} - Layer {layer} - Path Length {path_length}", fontsize=14)
-                # Display inline instead of saving
-                display(plt.gcf())
-                plt.close()
-            
-            # Replace the method
-            visualizer.plot_attention = lambda *args, **kwargs: plot_inline(visualizer, *args, **kwargs)
-            
-            # Run the visualization
-            print("Running attention visualization...")
-            visualizer.infer_and_visualize_attention(
-                input_text=input_text,
-                heads=heads,
-                layers=layers,
-                problem="path"  # Default problem type
-            )
-        except Exception as e:
-            traceback.print_exc()
-            print(f"Error during visualization: {e}")
-            
-            # Fallback - direct visualization without the AttentionVisualizer class
-            print("\nTrying direct visualization as fallback...")
-            
-            # Encode the input
-            tokens = []
-            for token in input_text.split():
-                if token in stoi:
-                    tokens.append(stoi[token])
-                else:
-                    print(f"Warning: Token '{token}' not found in vocabulary")
-            
-            input_tensor = torch.tensor([tokens], dtype=torch.long).to(device)
-            
-            # Run model with attention weights
-            with torch.no_grad():
-                _, _, attention_weights = model(input_tensor, return_attn_weights=True)
-            
-            # Visualize attention patterns directly
-            for layer_idx in layers:
-                if layer_idx < len(attention_weights):
-                    layer_weights = attention_weights[layer_idx]
-                    for head_idx in heads:
-                        if head_idx < layer_weights.shape[1]:
-                            # Create plot
-                            plt.figure(figsize=(12, 10))
-                            attn_matrix = layer_weights[0, head_idx].cpu().numpy()
-                            sns.heatmap(attn_matrix, cmap="viridis", cbar=True, square=True)
-                            plt.title(f"Attention Weights - Layer {layer_idx}, Head {head_idx}")
-                            plt.xlabel("Key Tokens")
-                            plt.ylabel("Query Tokens")
-                            # Display inline
-                            display(plt.gcf())
-                            plt.close()
+        if not valid_input:
+            continue
+        
+        input_tensor = torch.tensor([tokens], dtype=torch.long).to(device)
+        
+        # Run model with attention weights
+        with torch.no_grad():
+            _, _, attention_weights = model(input_tensor, return_attn_weights=True)
+        
+        # Accumulate attention weights
+        for layer_idx in layers:
+            if layer_idx < len(attention_weights):
+                layer_weights = attention_weights[layer_idx]
+                for head_idx in heads:
+                    if head_idx < layer_weights.shape[1]:
+                        key = (layer_idx, head_idx)
+                        attn_matrix = layer_weights[0, head_idx].cpu().numpy()
+                        
+                        if key not in attention_accumulators:
+                            attention_accumulators[key] = np.zeros_like(attn_matrix)
+                        
+                        attention_accumulators[key] += attn_matrix
+    
+    # Calculate and visualize average attention
+    num_valid_inputs = len([inp for inp in test_inputs if all(token in stoi for token in inp.split())])
+    print(f"Averaging over {num_valid_inputs} valid inputs")
+    
+    for (layer_idx, head_idx), accumulated_attention in attention_accumulators.items():
+        # Calculate average
+        avg_attention = accumulated_attention / num_valid_inputs
+        
+        # Create plot
+        plt.figure(figsize=(12, 10))
+        
+        # Create position labels (1-indexed)
+        position_labels = [str(i+1) for i in range(test_length)]
+        
+        # Create the heatmap
+        sns.heatmap(avg_attention, cmap="viridis", cbar=True, square=True, annot=False)
+        
+        # Update the title
+        plt.title(f"Average Attention - Layer {layer_idx}, Head {head_idx} - Sequence Length {test_length} ({num_valid_inputs} samples)", fontsize=14)
+        
+        # Set the ticks to position numbers
+        plt.xticks(np.arange(test_length) + 0.5, position_labels)
+        plt.yticks(np.arange(test_length) + 0.5, position_labels)
+        
+        plt.xlabel("Key Position", fontsize=12)
+        plt.ylabel("Query Position", fontsize=12)
+        
+        # Display inline
+        display(plt.gcf())
+        plt.close()
+
+# Usage functions for convenience
+def visualize_single_attention(model_path, meta_path, input_text, heads=[0], layers=[0], device='cuda'):
+    """Convenience function for single input visualization"""
+    return visualize_attention_inline(model_path, meta_path, input_text, heads, layers, device)
+
+def visualize_average_attention(model_path, meta_path, test_file_path, test_length, heads=[0], layers=[0], device='cuda'):
+    """Convenience function for average attention visualization"""
+    return visualize_average_attention_inline(model_path, meta_path, test_file_path, test_length, heads, layers, device)
