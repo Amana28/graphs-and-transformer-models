@@ -1,21 +1,3 @@
-"""
-This training script can be run both on a single gpu in debug mode,
-and also in a larger training run with distributed data parallel (ddp).
-
-To run on a single GPU, example:
-$ python train.py --batch_size=32 --compile=False
-
-To run with DDP on 4 gpus on 1 node, example:
-$ torchrun --standalone --nproc_per_node=4 train.py
-
-To run with DDP on 4 gpus across 2 nodes, example:
-- Run on the first (master) node with example IP 123.456.123.456:
-$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=123.456.123.456 --master_port=1234 train.py
-- Run on the worker node:
-$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 train.py
-(If your cluster does not have Infiniband interconnect prepend NCCL_IB_DISABLE=1)
-"""
-
 import os
 import sys
 import time
@@ -49,9 +31,10 @@ parser.add_argument('--n_head', type=int, default=1, help='Number of attention h
 parser.add_argument('--n_embd', type=int, default=120, help='Size of the embeddings (default: 120)')
 parser.add_argument('--max_iters', type=int, default=10000, help='Number of Iterations (default: 10000)')
 parser.add_argument('--num_nodes', type=int, default=100, help='Number of Nodes (default: 100)')
-parser.add_argument('--num_of_paths', type=int, default=20, help='Number of Paths (default: 1)')
+parser.add_argument('--num_of_paths', type=int, default=20, help='Number of Paths (default: 20)')
+parser.add_argument('--task_type', type=str, default='', choices=['', 'st', 'sts'], help='Task type: st or sts (empty for original structure)')
 parser.add_argument('--use_identity_embeddings', action='store_true', help='Use identity matrix for embeddings (default: False)')
-parser.add_argument('--use_positional_embeddings', action='store_false', dest='use_positional_embeddings', help='Use positional embeddings (default: True)')
+parser.add_argument('--no_positional_embeddings', action='store_false', dest='use_positional_embeddings', help='Disable positional embeddings (default: True)')
 
 args = parser.parse_args()
 
@@ -62,10 +45,16 @@ n_embd = args.n_embd
 max_iters = args.max_iters
 num_nodes = args.num_nodes
 num_of_paths = args.num_of_paths
+task_type = args.task_type
 use_identity_embeddings = args.use_identity_embeddings  # Default is False (use learned embeddings)
 use_positional_embeddings = args.use_positional_embeddings  # Default is True (use positional embeddings)
 
-data_dir = os.path.join('data', f'{dataset}/{num_nodes}')
+# Define data directory with optional task type subdirectory
+if task_type:
+    data_dir = os.path.join('data', f'{dataset}', task_type, f'{num_nodes}')
+else:
+    data_dir = os.path.join('data', f'{dataset}', f'{num_nodes}')
+
 with open(os.path.join(data_dir, 'meta.pkl'), 'rb') as f:
     meta = pickle.load(f)
     
@@ -88,9 +77,17 @@ elif use_identity_embeddings and use_positional_embeddings:
 # For the default settings (learned + pos OR identity + pos), use empty string
 log_suffix = embedding_suffix
 
-# Modify the config to include embedding settings
+# Modify the config to include embedding settings and task type
 config = f"{n_layer}_{n_head}_{n_embd}{embedding_suffix}"
-out_dir = f'out/{dataset}_{config}_{num_nodes}'
+if task_type:
+    out_dir = f'out/{dataset}_{task_type}_{config}_{num_nodes}'
+else:
+    out_dir = f'out/{dataset}_{config}_{num_nodes}'
+
+if task_type:
+    print(f"Training {task_type.upper()} task")
+else:
+    print(f"Training default task format")
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -146,6 +143,14 @@ max_new_tokens = 200
 flag = 0
 test_interval = 100'''
 # -----------------------------------------------------------------------------
+# # updated config values
+# learning_rate = 1e-3  # Increased from 5e-4 
+# warmup_iters = max_iters//40  # Shorter warmup (from //20)
+# dropout = 0.1  # Increased from 0.0 for better regularization
+# weight_decay = 0.2  # Increased from 0.1 for better regularization
+# # # Print updated config values
+# print(f"Using regularization with learning rate={learning_rate}, warmup iterations={warmup_iters}, dropout={dropout} and weight_decay={weight_decay}")
+# -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 #exec(open('configurator.py').read()) # overrides from command line or config file
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
@@ -182,13 +187,23 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-# poor man's data loader
-if(num_of_paths == 0):
-    train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+# Load data files based on task type
+if task_type == 'sts':
+    # For STS task, use sts-specific files
+    if(num_of_paths == 0):
+        train_data = np.memmap(os.path.join(data_dir, 'train_sts.bin'), dtype=np.uint16, mode='r')
+        val_data = np.memmap(os.path.join(data_dir, 'val_sts.bin'), dtype=np.uint16, mode='r')
+    else:
+        train_data = np.memmap(os.path.join(data_dir, f'train_sts_{num_of_paths}.bin'), dtype=np.uint16, mode='r')
+        val_data = np.memmap(os.path.join(data_dir, 'val_sts.bin'), dtype=np.uint16, mode='r')
 else:
-    train_data = np.memmap(os.path.join(data_dir, f'train_{num_of_paths}.bin'), dtype=np.uint16, mode='r')
-    val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+    # For ST task or empty task_type, use original files
+    if(num_of_paths == 0):
+        train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+        val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+    else:
+        train_data = np.memmap(os.path.join(data_dir, f'train_{num_of_paths}.bin'), dtype=np.uint16, mode='r')
+        val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
 
 
 def get_batch(split):
