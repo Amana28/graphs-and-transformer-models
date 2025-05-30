@@ -237,7 +237,7 @@ if __name__ == "__main__":
         
         print(f"Detailed permutation mapping saved to: {permutation_file}")
     
-    # Print summary message with length information
+    # Print summary 
     length_info = f"fixed length of {args.fixed_length}" if args.fixed_length is not None else f"variable length ({args.min_length}-{args.max_length})"
     if args.only_min_max_length and args.fixed_length is None:
         length_info = f"only {args.min_length} or {args.max_length} length"

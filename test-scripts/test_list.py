@@ -26,6 +26,8 @@ def parse_args():
     parser.add_argument('--fixed_length', type=int, default=None, help='Fixed length of lists if specified')
     parser.add_argument('--permutation_type', type=str, default="reversal", 
                         help='Type of permutation to apply (reversal, random, manual)')
+    parser.add_argument('--no_delimiter', action='store_true', default=False,
+                        help='Test data has no % delimiter between input and output lists')
     return parser.parse_args()
 
 def encode(s, stoi):
@@ -39,20 +41,30 @@ def decode(l, itos):
         dec = dec + itos[i] + " "
     return dec[:-1]
 
-def check_permutation_with_expected(generated, expected_output):
+def check_permutation_with_expected(generated, expected_output, has_delimiter=True):
     """Check if the generated permutation matches the expected output"""
     
-    # Check if '%' exists in the generated output
-    if '%' not in generated:
-        return "wrong syntax", -1
-    
-    # Split at '%'
-    parts = generated.split('%')
-    if len(parts) != 2:
-        return "wrong syntax", -1
-    
-    # Get the model's output
-    output = parts[1].strip()
+    if has_delimiter:
+        # Check if '%' exists in the generated output
+        if '%' not in generated:
+            return "wrong syntax", -1
+        
+        # Split at '%'
+        parts = generated.split('%')
+        if len(parts) != 2:
+            return "wrong syntax", -1
+        
+        # Get the model's output
+        output = parts[1].strip()
+    else:
+        # For no delimiter case, we need to split the generated output
+        # The first half should match the input, second half is the output
+        tokens = generated.strip().split()
+        if len(tokens) % 2 != 0:
+            return "wrong syntax", -1
+        
+        mid_point = len(tokens) // 2
+        output = " ".join(tokens[mid_point:])
     
     # Split into tokens
     output_tokens = output.split()
@@ -68,6 +80,27 @@ def check_permutation_with_expected(generated, expected_output):
             return f"failed at position {i}", i
     
     return "", -1  # Success
+
+def parse_test_line(line, has_delimiter=True):
+    """Parse test line to extract prompt and expected output"""
+    line = line.strip()
+    
+    if has_delimiter:
+        if '%' in line:
+            parts = line.split('%')
+            prefix = parts[0].strip() + ' %'  # Include % as prompt ending
+            expected = parts[1].strip()  # Get the expected output part
+            return prefix, expected
+    else:
+        # For no delimiter case, split in half
+        tokens = line.split()
+        if len(tokens) >= 2:
+            mid_point = len(tokens) // 2
+            prefix = " ".join(tokens[:mid_point])
+            expected = " ".join(tokens[mid_point:])
+            return prefix, expected
+    
+    return None, None
 
 def main():
     args = parse_args()
@@ -120,6 +153,7 @@ def main():
     print(f"- Using identity embeddings: {getattr(gptconf, 'use_identity_embeddings', False)}")
     print(f"- Using positional embeddings: {getattr(gptconf, 'use_positional_embeddings', True)}")
     print(f"- Testing with permutation type: {args.permutation_type}")
+    print(f"- Has delimiter: {not args.no_delimiter}")
     
     model.eval()
     model.to(args.device)
@@ -133,13 +167,12 @@ def main():
     
     with open(test_file, 'r') as f:
         for line in f:
-            line = line.strip()
-            if '%' in line:
-                parts = line.split('%')
-                prefix = parts[0].strip() + ' %'  # Include % as prompt ending
-                expected = parts[1].strip()  # Get the expected output part
+            prefix, expected = parse_test_line(line, not args.no_delimiter)
+            if prefix is not None and expected is not None:
                 test_prompts.append(prefix)
                 test_expected_outputs.append(expected)
+    
+    print(f"Loaded {len(test_prompts)} test examples")
     
     # Limit test samples if specified
     if args.test_samples > 0 and args.test_samples < len(test_prompts):
@@ -204,7 +237,7 @@ def main():
                 expected_output = test_expected_outputs[prompt_idx]
                 
                 # Evaluate by comparing with expected output
-                error_type, error_idx = check_permutation_with_expected(item, expected_output)
+                error_type, error_idx = check_permutation_with_expected(item, expected_output, not args.no_delimiter)
                 total += 1
                 
                 # Track error types
@@ -223,12 +256,16 @@ def main():
                             errors_by_type["failed at position"][error_idx] = 0
                         errors_by_type["failed at position"][error_idx] += 1
                 
-                # Write to output file in the new format
-                output_part = item.split('%')[1].strip() if '%' in item else 'no output'
-                error_msg = f"  {error_type}" if error_type else ""  # include two spaces before error message
-                
-                # Format: input % output  error
-                f.write(f"{prompt} {output_part}{error_msg}\n")
+                # Write to output file in the appropriate format
+                if not args.no_delimiter:
+                    # With delimiter
+                    output_part = item.split('%')[1].strip() if '%' in item else 'no output'
+                    error_msg = f"  {error_type}" if error_type else ""  # include two spaces before error message
+                    f.write(f"{prompt} {output_part}{error_msg}\n")
+                else:
+                    # Without delimiter
+                    error_msg = f"  {error_type}" if error_type else ""  # include two spaces before error message
+                    f.write(f"{item}{error_msg}\n")
     
     # Calculate accuracy
     accuracy = (total - wrong) / total * 100 if total > 0 else 0
@@ -263,6 +300,7 @@ def main():
         f.write(f"- Using identity embeddings: {getattr(gptconf, 'use_identity_embeddings', False)}\n")
         f.write(f"- Using positional embeddings: {getattr(gptconf, 'use_positional_embeddings', True)}\n")
         f.write(f"- Permutation type: {args.permutation_type}\n")
+        f.write(f"- Has delimiter: {not args.no_delimiter}\n")
         f.write("\n")
         f.write(f"TEST RESULTS:\n")
         f.write(f"Total samples: {total}\n")
