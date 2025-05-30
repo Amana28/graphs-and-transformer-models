@@ -96,9 +96,12 @@ def apply_permutation(input_list, permutation_type="reversal", fixed_indices=Non
         # Default to returning the original list
         return input_list
 
-def format_list(rand_list, permuted_list):
-    """Format the list as a string with a '%' separator."""
-    return " ".join(map(str, rand_list)) + " % " + " ".join(map(str, permuted_list)) + "\n"
+def format_list(rand_list, permuted_list, use_delimiter=True):
+    """Format the list as a string with or without a '%' separator."""
+    if use_delimiter:
+        return " ".join(map(str, rand_list)) + " % " + " ".join(map(str, permuted_list)) + "\n"
+    else:
+        return " ".join(map(str, rand_list)) + " " + " ".join(map(str, permuted_list)) + "\n"
 
 def generate_datasets(args, fixed_indices=None):
     """Generate training and validation datasets according to the specified parameters."""
@@ -119,7 +122,7 @@ def generate_datasets(args, fixed_indices=None):
         # Apply the selected permutation
         permuted_list = apply_permutation(rand_list, args.permutation_type, fixed_indices)
         
-        formatted_list = format_list(rand_list, permuted_list)
+        formatted_list = format_list(rand_list, permuted_list, not args.no_delimiter)
         all_lists.append(formatted_list)
     
     # Shuffle the generated lists
@@ -178,6 +181,8 @@ if __name__ == "__main__":
                         help='Type of permutation to apply (reversal, random, or manual)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
+    parser.add_argument('--no_delimiter', action='store_true', default=False,
+                        help='Remove the "%" delimiter between input and output lists')
     
     args = parser.parse_args()
     
