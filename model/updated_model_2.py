@@ -1,5 +1,5 @@
 """
-First update of model.py to implement IdentityEmbeddings
+Second update of model.py to implement fixed positional embeddings
 """
 
 import math
@@ -121,7 +121,7 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     use_identity_embeddings: bool = False  # Whether to use identity matrix for token embeddings
-    use_positional_embeddings: bool = True  # Whether to use positional embeddings
+    use_fixed_positions: bool = False  # Whether to use fixed positional embeddings (identity matrix)
 
 class IdentityEmbedding(nn.Module):
     """Identity embedding layer - creates one-hot vectors for input tokens"""
@@ -166,6 +166,22 @@ class IdentityEmbedding(nn.Module):
             # Apply the projection to get embeddings of the right dimension
             return one_hot @ self.projection
 
+class FixedPositionalEmbedding(nn.Module):
+    """Fixed positional embedding using identity matrix (one-hot encoding)"""
+    def __init__(self, block_size):
+        super().__init__()
+        self.block_size = block_size
+        
+        # Create fixed identity matrix - this won't be learned
+        # Each position gets a unique one-hot vector
+        identity_matrix = torch.eye(block_size)  # (block_size, block_size)
+        self.register_buffer('position_embeddings', identity_matrix)
+        
+    def forward(self, seq_len):
+        # Return the first seq_len rows of the identity matrix
+        # Shape: (seq_len, block_size)
+        return self.position_embeddings[:seq_len]
+
 class GPT(nn.Module):
 
     def __init__(self, config):
@@ -174,25 +190,38 @@ class GPT(nn.Module):
         assert config.block_size is not None
         self.config = config
 
+        # Calculate effective embedding dimension
+        # If using fixed positions, we need to account for concatenated positional info
+        if config.use_fixed_positions:
+            # Token embeddings: n_embd - block_size, Positional: block_size
+            token_emb_dim = config.n_embd - config.block_size
+            if token_emb_dim <= 0:
+                raise ValueError(f"n_embd ({config.n_embd}) must be larger than block_size ({config.block_size}) when using fixed positions")
+        else:
+            token_emb_dim = config.n_embd
+
         self.transformer = nn.ModuleDict(dict(
-            # Token embeddings
-            wte = (nn.Embedding(config.vocab_size, config.n_embd) 
+            # Token embeddings with adjusted dimension
+            wte = (nn.Embedding(config.vocab_size, token_emb_dim) 
                    if not config.use_identity_embeddings 
-                   else IdentityEmbedding(config.vocab_size, config.n_embd)),
+                   else IdentityEmbedding(config.vocab_size, token_emb_dim)),
             
-            # Position embeddings (only if enabled)
-            wpe = (nn.Embedding(config.block_size, config.n_embd) 
-                   if config.use_positional_embeddings 
+            # Fixed positional embeddings (only if enabled)
+            wpe = (FixedPositionalEmbedding(config.block_size) 
+                   if config.use_fixed_positions 
                    else None),
             
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
+        
+        # Output head uses full n_embd dimension
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         
-        # Weight tying - only if we're not using identity embeddings
-        if not config.use_identity_embeddings:
+        # Weight tying - only if we're not using identity embeddings and not using fixed positions
+        # Note: This becomes more complex with concatenated embeddings
+        if not config.use_identity_embeddings and not config.use_fixed_positions:
             self.transformer.wte.weight = self.lm_head.weight
 
         # init all weights
@@ -209,12 +238,11 @@ class GPT(nn.Module):
         """
         Return the number of parameters in the model.
         For non-embedding count (default), the position embeddings get subtracted.
-        The token embeddings would too, except due to the parameter sharing these
-        params are actually used as weights in the final layer, so we include them.
+        Note: Fixed positional embeddings have no learnable parameters to subtract.
         """
         n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding and self.config.use_positional_embeddings:
-            n_params -= self.transformer.wpe.weight.numel()
+        # Fixed positional embeddings have no learnable parameters
+        # so no subtraction needed
         return n_params
 
     def _init_weights(self, module):
@@ -231,16 +259,20 @@ class GPT(nn.Module):
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         
         # Get token embeddings
-        tok_emb = self.transformer.wte(idx)  # (b, t, n_embd)
+        tok_emb = self.transformer.wte(idx)  # (b, t, token_emb_dim)
         
-        # Sum token embeddings with position embeddings if enabled
-        if self.config.use_positional_embeddings:
-            pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0)  # (1, t)
-            pos_emb = self.transformer.wpe(pos)  # (1, t, n_embd)
-            x = self.transformer.drop(tok_emb + pos_emb)
+        if self.config.use_fixed_positions:
+            # Get fixed positional embeddings
+            pos_emb = self.transformer.wpe(t)  # (t, block_size)
+            pos_emb = pos_emb.unsqueeze(0).expand(b, -1, -1)  # (b, t, block_size)
+            
+            # Concatenate token and positional embeddings
+            x = torch.cat([tok_emb, pos_emb], dim=-1)  # (b, t, n_embd)
         else:
-            # Just use token embeddings without positional information
-            x = self.transformer.drop(tok_emb)
+            # Just use token embeddings
+            x = tok_emb
+        
+        x = self.transformer.drop(x)
         
         # Process through transformer blocks
         for block in self.transformer.h:
@@ -264,8 +296,12 @@ class GPT(nn.Module):
         # but want to use a smaller block size for some smaller, simpler model
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
-        if self.config.use_positional_embeddings:
-            self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
+        
+        if self.config.use_fixed_positions:
+            # Update the fixed positional embedding buffer
+            new_identity = torch.eye(block_size)
+            self.transformer.wpe.register_buffer('position_embeddings', new_identity)
+        
         for block in self.transformer.h:
             if hasattr(block.attn, 'bias'):
                 block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
@@ -275,7 +311,7 @@ class GPT(nn.Module):
         assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
         override_args = override_args or {} # default to empty dict
         # only dropout can be overridden see more notes below
-        assert all(k in ['dropout', 'use_identity_embeddings', 'use_positional_embeddings'] for k in override_args)
+        assert all(k in ['dropout', 'use_identity_embeddings', 'use_fixed_positions'] for k in override_args)
         from transformers import GPT2LMHeadModel
         print("loading weights from pretrained gpt: %s" % model_type)
 
@@ -293,7 +329,7 @@ class GPT(nn.Module):
         
         # Set default values for our new parameters
         config_args['use_identity_embeddings'] = False
-        config_args['use_positional_embeddings'] = True
+        config_args['use_fixed_positions'] = False
         
         # Handle overrides
         for k, v in override_args.items():
@@ -308,13 +344,17 @@ class GPT(nn.Module):
         if config_args['use_identity_embeddings']:
             print("Using identity embeddings, not loading token embeddings from pretrained model")
         
+        # For fixed positions, we don't need to load positional embeddings
+        if config_args['use_fixed_positions']:
+            print("Using fixed positions, not loading positional embeddings from pretrained model")
+        
         sd = model.state_dict()
         sd_keys = sd.keys()
         sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
         
-        # Don't load positional embeddings if we're not using them
-        if not config_args['use_positional_embeddings']:
-            print("Not using positional embeddings, removing them from state dict keys")
+        # Don't load positional embeddings if we're using fixed positions
+        if config_args['use_fixed_positions']:
+            print("Not using learnable positional embeddings, removing them from state dict keys")
             sd_keys = [k for k in sd_keys if not k.startswith('transformer.wpe')]
 
         # init a huggingface/transformers model
@@ -331,8 +371,8 @@ class GPT(nn.Module):
             sd_keys_hf = [k for k in sd_keys_hf if not k.startswith('transformer.wte')]
             sd_keys = [k for k in sd_keys if not k.startswith('transformer.wte')]
         
-        # Skip positional embeddings if not using them
-        if not config_args['use_positional_embeddings']:
+        # Skip positional embeddings if using fixed positions
+        if config_args['use_fixed_positions']:
             sd_keys_hf = [k for k in sd_keys_hf if not k.startswith('transformer.wpe')]
         
         transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
@@ -397,7 +437,7 @@ class GPT(nn.Module):
         # will only return the first occurence, key'd by 'transformer.wte.weight', below.
         # so let's manually remove 'lm_head.weight' from decay set. This will include
         # this tensor into optimization via transformer.wte.weight only, and not decayed.
-        if 'lm_head.weight' in decay and not self.config.use_identity_embeddings:
+        if 'lm_head.weight' in decay and not self.config.use_identity_embeddings and not self.config.use_fixed_positions:
             decay.remove('lm_head.weight')
 
         # validate that we considered every parameter
