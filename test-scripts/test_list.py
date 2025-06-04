@@ -255,7 +255,7 @@ def main():
     print(f"- wrong length: {errors_by_type['wrong length']}")
     print(f"- cannot validate random permutation: {errors_by_type['cannot validate random permutation']}")
     print(f"- unknown permutation type: {errors_by_type['unknown permutation type']}")
-    print("- failed at absolute position (1-indexed):")
+    print("- failed at position :")
     for pos, count in sorted(errors_by_type["failed at position"].items()):
         percentage = (count / total) * 100
         print(f"  - position {pos}: {count} ({percentage:.2f}%)")
