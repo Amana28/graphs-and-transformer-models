@@ -167,7 +167,7 @@ if __name__ == "__main__":
                         help='If provided, all lists will be this exact length (overrides min/max length)')
     parser.add_argument('--only_min_max_length', type=lambda x: (str(x).lower() == 'true'), default=False,
                         help='If True, randomly choose between min_length and max_length only (not values in between)')
-    parser.add_argument('--num_list_copies', type=int, default=5, 
+    parser.add_argument('--num_list_copies', type=int, default=1, 
                         help='the number of times each list is repeated in the training data.')  
     parser.add_argument('--num_lists', type=int, default=10000, 
                         help='the total number of generated lists')       
