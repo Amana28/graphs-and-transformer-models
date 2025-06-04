@@ -1,7 +1,7 @@
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model.updated_model import GPTConfig, GPT 
+from model.updated_model_2 import GPTConfig, GPT 
 import numpy as np
 import argparse
 import pickle
@@ -40,7 +40,7 @@ def decode(l, itos):
     return dec[:-1]
 
 def check_permutation_with_expected(generated, expected_output):
-    """Check if the generated permutation matches the expected output"""
+    """Check if the generated permutation matches the expected output using absolute positions (1-indexed)"""
     
     # Check if '%' exists in the generated output
     if '%' not in generated:
@@ -51,21 +51,29 @@ def check_permutation_with_expected(generated, expected_output):
     if len(parts) != 2:
         return "wrong syntax", -1
     
-    # Get the model's output
-    output = parts[1].strip()
+    # Get the full input sequence and model's output
+    full_input = parts[0].strip()
+    model_output = parts[1].strip()
     
     # Split into tokens
-    output_tokens = output.split()
+    full_input_tokens = full_input.split()
+    model_output_tokens = model_output.split()
     expected_tokens = expected_output.split()
     
     # Check if the length matches
-    if len(output_tokens) != len(expected_tokens):
+    if len(model_output_tokens) != len(expected_tokens):
         return "wrong length", -1
     
+    # Calculate absolute positions (1-indexed)
+    # Position = len(input_tokens) + 1 (for '%') + relative_position_in_output + 1 (for 1-indexing)
+    input_length = len(full_input_tokens)
+    output_start_position = input_length + 2  # +1 for '%', +1 for 1-indexing
+    
     # Check if each token matches the expected output
-    for i, (expected, actual) in enumerate(zip(expected_tokens, output_tokens)):
+    for i, (expected, actual) in enumerate(zip(expected_tokens, model_output_tokens)):
         if expected != actual:
-            return f"failed at position {i}", i
+            absolute_position = output_start_position + i
+            return f"failed at position {absolute_position}", absolute_position
     
     return "", -1  # Success
 
@@ -118,7 +126,7 @@ def main():
     print(f"- Heads: {gptconf.n_head}")
     print(f"- Embedding dim: {gptconf.n_embd}")
     print(f"- Using identity embeddings: {getattr(gptconf, 'use_identity_embeddings', False)}")
-    print(f"- Using positional embeddings: {getattr(gptconf, 'use_positional_embeddings', True)}")
+    print(f"- Using fixed positions: {getattr(gptconf, 'use_fixed_positions', False)}")
     print(f"- Testing with permutation type: {args.permutation_type}")
     
     model.eval()
@@ -168,7 +176,7 @@ def main():
         "wrong length": 0,
         "cannot validate random permutation": 0,
         "unknown permutation type": 0,
-        "failed at position": {}  # Dictionary to track failures at each position
+        "failed at position": {}  # Dictionary to track failures at each absolute position
     }
     
     # Use appropriate batch size for tracking purposes
@@ -176,6 +184,7 @@ def main():
     total_samples = len(encoded_texts)
     
     print(f"Testing on {total_samples} examples")
+    print("Note: Error positions are now reported as absolute positions (1-indexed from start of input)")
     
     # Process in batches (modified for individual tensors)
     for i in tqdm(range(0, total_samples, batch_size)):
@@ -246,7 +255,7 @@ def main():
     print(f"- wrong length: {errors_by_type['wrong length']}")
     print(f"- cannot validate random permutation: {errors_by_type['cannot validate random permutation']}")
     print(f"- unknown permutation type: {errors_by_type['unknown permutation type']}")
-    print("- failed at position:")
+    print("- failed at absolute position (1-indexed):")
     for pos, count in sorted(errors_by_type["failed at position"].items()):
         percentage = (count / total) * 100
         print(f"  - position {pos}: {count} ({percentage:.2f}%)")
@@ -261,7 +270,7 @@ def main():
         f.write(f"- Heads: {gptconf.n_head}\n")
         f.write(f"- Embedding dim: {gptconf.n_embd}\n")
         f.write(f"- Using identity embeddings: {getattr(gptconf, 'use_identity_embeddings', False)}\n")
-        f.write(f"- Using positional embeddings: {getattr(gptconf, 'use_positional_embeddings', True)}\n")
+        f.write(f"- Using fixed positions: {getattr(gptconf, 'use_fixed_positions', False)}\n")
         f.write(f"- Permutation type: {args.permutation_type}\n")
         f.write("\n")
         f.write(f"TEST RESULTS:\n")
@@ -275,10 +284,11 @@ def main():
         f.write(f"- wrong length: {errors_by_type['wrong length']}\n")
         f.write(f"- cannot validate random permutation: {errors_by_type['cannot validate random permutation']}\n")
         f.write(f"- unknown permutation type: {errors_by_type['unknown permutation type']}\n")
-        f.write("- failed at position:\n")
+        f.write("- failed at absolute position (1-indexed):\n")
         for pos, count in sorted(errors_by_type["failed at position"].items()):
             percentage = (count / total) * 100
             f.write(f"  - position {pos}: {count} ({percentage:.2f}%)\n")
+        f.write("\nNote: Error positions are absolute positions (1-indexed from start of input sequence)\n")
     
     print(f"\nResults saved to: {output_file}")
 
