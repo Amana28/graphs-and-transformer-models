@@ -1,5 +1,10 @@
 """
-Second update of model.py to implement fixed positional embeddings
+Full definition of a GPT Language Model, all of it in this single file.
+References:
+1) the official GPT-2 TensorFlow implementation released by OpenAI:
+https://github.com/openai/gpt-2/blob/master/src/model.py
+2) huggingface/transformers PyTorch implementation:
+https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 """
 
 import math
@@ -120,67 +125,6 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-    use_identity_embeddings: bool = False  # Whether to use identity matrix for token embeddings
-    use_fixed_positions: bool = False  # Whether to use fixed positional embeddings (identity matrix)
-
-class IdentityEmbedding(nn.Module):
-    """Identity embedding layer - creates one-hot vectors for input tokens"""
-    def __init__(self, vocab_size, n_embd):
-        super().__init__()
-        self.vocab_size = vocab_size
-        self.n_embd = n_embd
-        
-        # Initialize projection matrix at creation time
-        if n_embd != vocab_size:
-            if n_embd < vocab_size:
-                # Truncate: take only first n_embd dimensions
-                projection = torch.zeros(vocab_size, n_embd)
-                projection[:n_embd, :] = torch.eye(n_embd)
-            else:
-                # Pad: use identity for first vocab_size dimensions, zeros for rest
-                projection = torch.zeros(vocab_size, n_embd)
-                projection[:, :vocab_size] = torch.eye(vocab_size)
-            
-            self.register_buffer('projection', projection)
-        
-    def forward(self, idx):
-        # Create one-hot vectors for each input token
-        # For efficient implementation, we create an identity matrix and use it as a lookup table
-        B, T = idx.size()
-        device = idx.device
-        
-        # If embedding dimension matches vocabulary size, use pure one-hot encoding
-        if self.n_embd == self.vocab_size:
-            # Use one-hot encoding (sparse to dense conversion)
-            one_hot = torch.zeros(B, T, self.vocab_size, device=device)
-            one_hot.scatter_(2, idx.unsqueeze(-1), 1)
-            return one_hot
-        else:
-            # If n_embd < vocab_size, we need to project down the one-hot vectors
-            # or if n_embd > vocab_size, we need to pad the one-hot vectors
-            # For simplicity, we'll use a fixed projection matrix
-            # This is just a basic approach - there are more sophisticated ways to handle this
-            one_hot = torch.zeros(B, T, self.vocab_size, device=device)
-            one_hot.scatter_(2, idx.unsqueeze(-1), 1)
-            
-            # Apply the projection to get embeddings of the right dimension
-            return one_hot @ self.projection
-
-class FixedPositionalEmbedding(nn.Module):
-    """Fixed positional embedding using identity matrix (one-hot encoding)"""
-    def __init__(self, block_size):
-        super().__init__()
-        self.block_size = block_size
-        
-        # Create fixed identity matrix - this won't be learned
-        # Each position gets a unique one-hot vector
-        identity_matrix = torch.eye(block_size)  # (block_size, block_size)
-        self.register_buffer('position_embeddings', identity_matrix)
-        
-    def forward(self, seq_len):
-        # Return the first seq_len rows of the identity matrix
-        # Shape: (seq_len, block_size)
-        return self.position_embeddings[:seq_len]
 
 class GPT(nn.Module):
 
@@ -190,40 +134,19 @@ class GPT(nn.Module):
         assert config.block_size is not None
         self.config = config
 
-        # Calculate effective embedding dimension
-        # If using fixed positions, we need to account for concatenated positional info
-        if config.use_fixed_positions:
-            # Token embeddings: n_embd - block_size, Positional: block_size
-            token_emb_dim = config.n_embd - config.block_size
-            if token_emb_dim <= 0:
-                raise ValueError(f"n_embd ({config.n_embd}) must be larger than block_size ({config.block_size}) when using fixed positions")
-        else:
-            # Use full n_embd for both token and learned positional embeddings
-            token_emb_dim = config.n_embd
-
         self.transformer = nn.ModuleDict(dict(
-            # Token embeddings with adjusted dimension
-            wte = (nn.Embedding(config.vocab_size, token_emb_dim) 
-                   if not config.use_identity_embeddings 
-                   else IdentityEmbedding(config.vocab_size, token_emb_dim)),
-            
-            # Positional embeddings - either fixed or learned
-            wpe = (FixedPositionalEmbedding(config.block_size) 
-                   if config.use_fixed_positions 
-                   else nn.Embedding(config.block_size, config.n_embd)),  # LEARNED positional embeddings
-            
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wpe = nn.Embedding(config.block_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
-        
-        # Output head uses full n_embd dimension
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        
-        # Weight tying - only if we're not using identity embeddings and not using fixed positions
-        # Note: Weight tying becomes complex with concatenated embeddings due to dimension mismatch
-        if not config.use_identity_embeddings and not config.use_fixed_positions:
-            self.transformer.wte.weight = self.lm_head.weight
+        # with weight tying when using torch.compile() some warnings get generated:
+        # "UserWarning: functional_call was passed multiple values for tied weights.
+        # This behavior is deprecated and will be an error in future versions"
+        # not 100% sure what this is, so far seems to be harmless. TODO investigate
+        self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
         # init all weights
         self.apply(self._init_weights)
@@ -239,13 +162,12 @@ class GPT(nn.Module):
         """
         Return the number of parameters in the model.
         For non-embedding count (default), the position embeddings get subtracted.
-        Note: Fixed positional embeddings have no learnable parameters to subtract.
+        The token embeddings would too, except due to the parameter sharing these
+        params are actually used as weights in the final layer, so we include them.
         """
         n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding and not self.config.use_fixed_positions:
-            # Subtract learned positional embedding parameters
+        if non_embedding:
             n_params -= self.transformer.wpe.weight.numel()
-        # Fixed positional embeddings have no learnable parameters to subtract
         return n_params
 
     def _init_weights(self, module):
@@ -260,24 +182,12 @@ class GPT(nn.Module):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        
-        # Get token embeddings
-        tok_emb = self.transformer.wte(idx)  # (b, t, token_emb_dim or n_embd)
-        
-        if self.config.use_fixed_positions:
-            # Fixed positional embeddings (concatenated)
-            pos_emb = self.transformer.wpe(t)  # (t, block_size)
-            pos_emb = pos_emb.unsqueeze(0).expand(b, -1, -1)  # (b, t, block_size)
-            x = torch.cat([tok_emb, pos_emb], dim=-1)  # (b, t, n_embd)
-        else:
-            # Learned positional embeddings (added, like original GPT)
-            pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0)  # (1, t)
-            pos_emb = self.transformer.wpe(pos)  # (1, t, n_embd)
-            x = tok_emb + pos_emb  # (b, t, n_embd) - ADDITION like original GPT
-        
-        x = self.transformer.drop(x)
-        
-        # Process through transformer blocks
+        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
+
+        # forward the GPT model itself
+        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (1, t, n_embd)
+        x = self.transformer.drop(tok_emb + pos_emb)
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
@@ -299,15 +209,7 @@ class GPT(nn.Module):
         # but want to use a smaller block size for some smaller, simpler model
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
-        
-        if self.config.use_fixed_positions:
-            # Update the fixed positional embedding buffer
-            new_identity = torch.eye(block_size)
-            self.transformer.wpe.register_buffer('position_embeddings', new_identity)
-        else:
-            # Update learned positional embeddings
-            self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
-        
+        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
         for block in self.transformer.h:
             if hasattr(block.attn, 'bias'):
                 block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
@@ -317,7 +219,7 @@ class GPT(nn.Module):
         assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
         override_args = override_args or {} # default to empty dict
         # only dropout can be overridden see more notes below
-        assert all(k in ['dropout', 'use_identity_embeddings', 'use_fixed_positions'] for k in override_args)
+        assert all(k == 'dropout' for k in override_args)
         from transformers import GPT2LMHeadModel
         print("loading weights from pretrained gpt: %s" % model_type)
 
@@ -332,36 +234,16 @@ class GPT(nn.Module):
         config_args['vocab_size'] = 50257 # always 50257 for GPT model checkpoints
         config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
         config_args['bias'] = True # always True for GPT model checkpoints
-        
-        # Set default values for our new parameters
-        config_args['use_identity_embeddings'] = False
-        config_args['use_fixed_positions'] = False
-        
-        # Handle overrides
-        for k, v in override_args.items():
-            config_args[k] = v
-            print(f"overriding {k} to {v}")
-            
+        # we can override the dropout rate, if desired
+        if 'dropout' in override_args:
+            print(f"overriding dropout rate to {override_args['dropout']}")
+            config_args['dropout'] = override_args['dropout']
         # create a from-scratch initialized minGPT model
         config = GPTConfig(**config_args)
         model = GPT(config)
-        
-        # For identity embeddings, we don't need to load the token embeddings
-        if config_args['use_identity_embeddings']:
-            print("Using identity embeddings, not loading token embeddings from pretrained model")
-        
-        # For fixed positions, we don't need to load positional embeddings
-        if config_args['use_fixed_positions']:
-            print("Using fixed positions, not loading positional embeddings from pretrained model")
-        
         sd = model.state_dict()
         sd_keys = sd.keys()
         sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
-        
-        # Don't load positional embeddings if we're using fixed positions
-        if config_args['use_fixed_positions']:
-            print("Not using learnable positional embeddings, removing them from state dict keys")
-            sd_keys = [k for k in sd_keys if not k.startswith('transformer.wpe')]
 
         # init a huggingface/transformers model
         model_hf = GPT2LMHeadModel.from_pretrained(model_type)
@@ -371,40 +253,21 @@ class GPT(nn.Module):
         sd_keys_hf = sd_hf.keys()
         sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore these, just a buffer
         sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
-        
-        # Skip token embeddings if identity embeddings are used
-        if config_args['use_identity_embeddings']:
-            sd_keys_hf = [k for k in sd_keys_hf if not k.startswith('transformer.wte')]
-            sd_keys = [k for k in sd_keys if not k.startswith('transformer.wte')]
-        
-        # Skip positional embeddings if using fixed positions
-        if config_args['use_fixed_positions']:
-            sd_keys_hf = [k for k in sd_keys_hf if not k.startswith('transformer.wpe')]
-        
         transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
-        
-        # Filter keys to match what's available
-        common_keys = set(sd_keys).intersection(set(sd_keys_hf))
-        sd_keys = [k for k in sd_keys if k in common_keys]
-        sd_keys_hf = [k for k in sd_keys_hf if k in common_keys]
-        
-        # Ensure the common keys are in the same order
-        sd_keys.sort()
-        sd_keys_hf.sort()
-        
-        assert len(sd_keys) == len(sd_keys_hf), f"mismatched keys: {len(sd_keys)} != {len(sd_keys_hf)}"
-        
-        for k_model, k_hf in zip(sd_keys, sd_keys_hf):
-            if any(k_model.endswith(w) for w in transposed):
+        # basically the openai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear
+        # this means that we have to transpose these weights when we import them
+        assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len(sd_keys_hf)} != {len(sd_keys)}"
+        for k in sd_keys_hf:
+            if any(k.endswith(w) for w in transposed):
                 # special treatment for the Conv1D weights we need to transpose
-                assert sd_hf[k_hf].shape[::-1] == sd[k_model].shape
+                assert sd_hf[k].shape[::-1] == sd[k].shape
                 with torch.no_grad():
-                    sd[k_model].copy_(sd_hf[k_hf].t())
+                    sd[k].copy_(sd_hf[k].t())
             else:
                 # vanilla copy over the other parameters
-                assert sd_hf[k_hf].shape == sd[k_model].shape, f"Shape mismatch: {sd_hf[k_hf].shape} vs {sd[k_model].shape} for {k_model} and {k_hf}"
+                assert sd_hf[k].shape == sd[k].shape
                 with torch.no_grad():
-                    sd[k_model].copy_(sd_hf[k_hf])
+                    sd[k].copy_(sd_hf[k])
 
         return model
 
@@ -420,7 +283,7 @@ class GPT(nn.Module):
         decay = set()
         no_decay = set()
         whitelist_weight_modules = (torch.nn.Linear, )
-        blacklist_weight_modules = (torch.nn.LayerNorm, LayerNorm, torch.nn.Embedding, IdentityEmbedding)
+        blacklist_weight_modules = (torch.nn.LayerNorm, LayerNorm, torch.nn.Embedding)
         for mn, m in self.named_modules():
             for pn, p in m.named_parameters():
                 fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
@@ -443,8 +306,7 @@ class GPT(nn.Module):
         # will only return the first occurence, key'd by 'transformer.wte.weight', below.
         # so let's manually remove 'lm_head.weight' from decay set. This will include
         # this tensor into optimization via transformer.wte.weight only, and not decayed.
-        if 'lm_head.weight' in decay and not self.config.use_identity_embeddings and not self.config.use_fixed_positions:
-            decay.remove('lm_head.weight')
+        decay.remove('lm_head.weight')
 
         # validate that we considered every parameter
         param_dict = {pn: p for pn, p in self.named_parameters()}
