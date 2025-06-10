@@ -15,7 +15,7 @@ from torch.distributed import init_process_group, destroy_process_group
 import re
 # Add the parent directory to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model.updated_model_2_no_mlp import GPTConfig, GPT  # Updated import
+from model.updated_model_3 import GPTConfig, GPT  # Updated import
 from logger import get_logger
 import logging
 
