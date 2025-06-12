@@ -13,9 +13,6 @@ data/list/**
 !data/list/*.py
 !data/list/**/*.py
 
-# Ignore visualization files (for now)
-/visualization-scripts/
-
 # Ignore __pycache__ directories
 __pycache__/
 
