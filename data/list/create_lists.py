@@ -53,6 +53,7 @@ def apply_permutation(input_list, permutation_type="reversal", fixed_indices=Non
                           "reversal" - simply reverse the list
                           "random" - apply a random permutation
                           "manual" - apply the specific permutation from the manual example
+                          "custom" - compare n-2 and n-1 elements, append 1st or 2nd element based on comparison
         fixed_indices: Optional fixed permutation indices to use for "random" type
     
     Returns:
@@ -92,13 +93,40 @@ def apply_permutation(input_list, permutation_type="reversal", fixed_indices=Non
                 
         return permuted_list
     
+    elif permutation_type == "custom":
+        # Custom permutation: compare n-2 and n-1 elements, append 1st or 2nd element
+        if len(input_list) < 2:
+            # If list has less than 2 elements, just return a copy
+            return input_list.copy()
+        
+        # Start with the original list
+        result = input_list.copy()
+        
+        # Compare n-2 and n-1 elements (last two elements)
+        n_minus_2 = input_list[-2]  # n-2 element
+        n_minus_1 = input_list[-1]  # n-1 element
+        
+        # Add 1st element if n-2 < n-1, otherwise add 2nd element
+        if n_minus_2 < n_minus_1:
+            result.append(input_list[0])  # 1st element
+        else:
+            if len(input_list) >= 2:
+                result.append(input_list[1])  # 2nd element
+            else:
+                result.append(input_list[0])  # Fallback if only 1 element
+        
+        return result
+    
     else:
         # Default to returning the original list
         return input_list
 
-def format_list(rand_list, permuted_list):
-    """Format the list as a string with a '%' separator."""
-    return " ".join(map(str, rand_list)) + " % " + " ".join(map(str, permuted_list)) + "\n"
+def format_list(rand_list, permuted_list, include_separator=True):
+    """Format the list as a string with an optional '%' separator."""
+    if include_separator:
+        return " ".join(map(str, rand_list)) + " % " + " ".join(map(str, permuted_list)) + "\n"
+    else:
+        return " ".join(map(str, permuted_list)) + "\n"
 
 def generate_datasets(args, fixed_indices=None):
     """Generate training and validation datasets according to the specified parameters."""
@@ -119,7 +147,7 @@ def generate_datasets(args, fixed_indices=None):
         # Apply the selected permutation
         permuted_list = apply_permutation(rand_list, args.permutation_type, fixed_indices)
         
-        formatted_list = format_list(rand_list, permuted_list)
+        formatted_list = format_list(rand_list, permuted_list, args.include_separator)
         all_lists.append(formatted_list)
     
     # Shuffle the generated lists
@@ -174,8 +202,10 @@ if __name__ == "__main__":
     parser.add_argument('--chance_in_train', type=float, default=0.7, 
                         help='ratio of training set -- the rest is validation')  
     parser.add_argument('--permutation_type', type=str, default="reversal",
-                        choices=["reversal", "random", "manual"],
-                        help='Type of permutation to apply (reversal, random, or manual)')
+                        choices=["reversal", "random", "manual", "custom"],
+                        help='Type of permutation to apply (reversal, random, manual, or custom)')
+    parser.add_argument('--include_separator', type=lambda x: (str(x).lower() == 'true'), default=True,
+                        help='Include % separator between original sequence and permutation (default: True)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
     
