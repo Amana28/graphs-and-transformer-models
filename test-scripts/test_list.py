@@ -25,7 +25,9 @@ def parse_args():
     parser.add_argument('--test_samples', type=int, default=-1, help='Number of test samples to evaluate (-1 for all)')
     parser.add_argument('--fixed_length', type=int, default=None, help='Fixed length of lists if specified')
     parser.add_argument('--permutation_type', type=str, default="reversal", 
-                        help='Type of permutation to apply (reversal, random, manual)')
+                        help='Type of permutation to apply (reversal, random, manual, custom)')
+    parser.add_argument('--no_separator', action='store_true', 
+                        help='Test data has no % separator, expected output is last token')
     return parser.parse_args()
 
 def encode(s, stoi):
@@ -39,10 +41,21 @@ def decode(l, itos):
         dec = dec + itos[i] + " "
     return dec[:-1]
 
-def check_permutation_with_expected(generated, expected_output):
+def check_permutation_with_expected(generated, expected_output, no_separator=False):
     """Check if the generated permutation matches the expected output using absolute positions (1-indexed)"""
     
-    # Check if '%' exists in the generated output
+    if no_separator:
+        # For no separator case: expected output is just the last token
+        generated_tokens = generated.strip().split()
+        if not generated_tokens:
+            return "empty output", -1
+        
+        last_token = generated_tokens[-1]
+        if last_token != expected_output:
+            return f"failed at last position", len(generated_tokens)
+        return "", -1  # Success
+    
+    # Original logic for separator case
     if '%' not in generated:
         return "wrong syntax", -1
     
@@ -128,6 +141,7 @@ def main():
     print(f"- Using identity embeddings: {getattr(gptconf, 'use_identity_embeddings', False)}")
     print(f"- Using fixed positions: {getattr(gptconf, 'use_fixed_positions', False)}")
     print(f"- Testing with permutation type: {args.permutation_type}")
+    print(f"- No separator mode: {args.no_separator}")
     
     model.eval()
     model.to(args.device)
@@ -142,12 +156,30 @@ def main():
     with open(test_file, 'r') as f:
         for line in f:
             line = line.strip()
-            if '%' in line:
-                parts = line.split('%')
-                prefix = parts[0].strip() + ' %'  # Include % as prompt ending
-                expected = parts[1].strip()  # Get the expected output part
-                test_prompts.append(prefix)
-                test_expected_outputs.append(expected)
+            if not line:
+                continue
+                
+            if args.no_separator:
+                # For no separator: the line is the complete sequence
+                # Expected output is the last token
+                tokens = line.split()
+                if len(tokens) >= 2:
+                    # Use all tokens except the last as prompt
+                    prompt_tokens = tokens[:-1]
+                    expected_token = tokens[-1]
+                    
+                    test_prompts.append(" ".join(prompt_tokens))
+                    test_expected_outputs.append(expected_token)
+            else:
+                # Original separator logic
+                if '%' in line:
+                    parts = line.split('%')
+                    prefix = parts[0].strip() + ' %'  # Include % as prompt ending
+                    expected = parts[1].strip()  # Get the expected output part
+                    test_prompts.append(prefix)
+                    test_expected_outputs.append(expected)
+    
+    print(f"Loaded {len(test_prompts)} test examples")
     
     # Limit test samples if specified
     if args.test_samples > 0 and args.test_samples < len(test_prompts):
@@ -174,8 +206,8 @@ def main():
     errors_by_type = {
         "wrong syntax": 0,
         "wrong length": 0,
-        "cannot validate random permutation": 0,
-        "unknown permutation type": 0,
+        "empty output": 0,
+        "failed at last position": 0,
         "failed at position": {}  # Dictionary to track failures at each absolute position
     }
     
@@ -184,7 +216,10 @@ def main():
     total_samples = len(encoded_texts)
     
     print(f"Testing on {total_samples} examples")
-    print("Note: Error positions are now reported as absolute positions (1-indexed from start of input)")
+    if args.no_separator:
+        print("Note: Testing last token prediction (no separator mode)")
+    else:
+        print("Note: Error positions are now reported as absolute positions (1-indexed from start of input)")
     
     # Process in batches (modified for individual tensors)
     for i in tqdm(range(0, total_samples, batch_size)):
@@ -199,7 +234,11 @@ def main():
             x = encoded_texts[j].unsqueeze(0)
             
             # Generate completion
-            y = model.generate(x, max_new_tokens, temperature=args.temperature, top_k=top_k)
+            if args.no_separator:
+                # For no separator, we just need to generate the next token
+                y = model.generate(x, 1, temperature=args.temperature, top_k=top_k)  # Generate only 1 token
+            else:
+                y = model.generate(x, max_new_tokens, temperature=args.temperature, top_k=top_k)
             
             # Decode and save
             y_pred.append(decode(y[0].tolist(), itos).split('\n')[0])
@@ -213,7 +252,7 @@ def main():
                 expected_output = test_expected_outputs[prompt_idx]
                 
                 # Evaluate by comparing with expected output
-                error_type, error_idx = check_permutation_with_expected(item, expected_output)
+                error_type, error_idx = check_permutation_with_expected(item, expected_output, args.no_separator)
                 total += 1
                 
                 # Track error types
@@ -223,21 +262,27 @@ def main():
                         errors_by_type["wrong syntax"] += 1
                     elif error_type == "wrong length":
                         errors_by_type["wrong length"] += 1
-                    elif error_type.startswith("cannot validate"):
-                        errors_by_type["cannot validate random permutation"] += 1
-                    elif error_type.startswith("unknown permutation type"):
-                        errors_by_type["unknown permutation type"] += 1
+                    elif error_type == "empty output":
+                        errors_by_type["empty output"] += 1
+                    elif error_type == "failed at last position":
+                        errors_by_type["failed at last position"] += 1
                     elif error_type.startswith("failed at position"):
                         if error_idx not in errors_by_type["failed at position"]:
                             errors_by_type["failed at position"][error_idx] = 0
                         errors_by_type["failed at position"][error_idx] += 1
                 
                 # Write to output file in the new format
-                output_part = item.split('%')[1].strip() if '%' in item else 'no output'
-                error_msg = f"  {error_type}" if error_type else ""  # include two spaces before error message
-                
-                # Format: input % output  error
-                f.write(f"{prompt} {output_part}{error_msg}\n")
+                if args.no_separator:
+                    # For no separator, show the generated token
+                    generated_tokens = item.strip().split()
+                    last_token = generated_tokens[-1] if generated_tokens else "no_output"
+                    error_msg = f"  {error_type}" if error_type else ""
+                    f.write(f"{prompt} -> {last_token} (expected: {expected_output}){error_msg}\n")
+                else:
+                    # Original format
+                    output_part = item.split('%')[1].strip() if '%' in item else 'no output'
+                    error_msg = f"  {error_type}" if error_type else ""
+                    f.write(f"{prompt} {output_part}{error_msg}\n")
     
     # Calculate accuracy
     accuracy = (total - wrong) / total * 100 if total > 0 else 0
@@ -245,20 +290,21 @@ def main():
     
     print(f"\nTest Results:")
     print(f"Total samples: {total}")
-    print(f"Correct permutations: {total - wrong}")
-    print(f"Incorrect permutations: {wrong}")
+    print(f"Correct predictions: {total - wrong}")
+    print(f"Incorrect predictions: {wrong}")
     print(f"Accuracy: {accuracy:.2f}%")
     print(f"Error Rate: {error_rate:.2f}%")
     
     print("\nError breakdown:")
     print(f"- wrong syntax: {errors_by_type['wrong syntax']}")
     print(f"- wrong length: {errors_by_type['wrong length']}")
-    print(f"- cannot validate random permutation: {errors_by_type['cannot validate random permutation']}")
-    print(f"- unknown permutation type: {errors_by_type['unknown permutation type']}")
-    print("- failed at position :")
-    for pos, count in sorted(errors_by_type["failed at position"].items()):
-        percentage = (count / total) * 100
-        print(f"  - position {pos}: {count} ({percentage:.2f}%)")
+    print(f"- empty output: {errors_by_type['empty output']}")
+    print(f"- failed at last position: {errors_by_type['failed at last position']}")
+    if not args.no_separator:
+        print("- failed at position :")
+        for pos, count in sorted(errors_by_type["failed at position"].items()):
+            percentage = (count / total) * 100
+            print(f"  - position {pos}: {count} ({percentage:.2f}%)")
     
     # Add summary to the output file
     with open(output_file, 'a') as f:
@@ -272,23 +318,24 @@ def main():
         f.write(f"- Using identity embeddings: {getattr(gptconf, 'use_identity_embeddings', False)}\n")
         f.write(f"- Using fixed positions: {getattr(gptconf, 'use_fixed_positions', False)}\n")
         f.write(f"- Permutation type: {args.permutation_type}\n")
+        f.write(f"- No separator mode: {args.no_separator}\n")
         f.write("\n")
         f.write(f"TEST RESULTS:\n")
         f.write(f"Total samples: {total}\n")
-        f.write(f"Correct permutations: {total - wrong}\n")
-        f.write(f"Incorrect permutations: {wrong}\n")
+        f.write(f"Correct predictions: {total - wrong}\n")
+        f.write(f"Incorrect predictions: {wrong}\n")
         f.write(f"Accuracy: {accuracy:.2f}%\n")
         f.write(f"Error Rate: {error_rate:.2f}%\n")
         f.write("\nError breakdown:\n")
         f.write(f"- wrong syntax: {errors_by_type['wrong syntax']}\n")
         f.write(f"- wrong length: {errors_by_type['wrong length']}\n")
-        f.write(f"- cannot validate random permutation: {errors_by_type['cannot validate random permutation']}\n")
-        f.write(f"- unknown permutation type: {errors_by_type['unknown permutation type']}\n")
-        f.write("- failed at absolute position (1-indexed):\n")
-        for pos, count in sorted(errors_by_type["failed at position"].items()):
-            percentage = (count / total) * 100
-            f.write(f"  - position {pos}: {count} ({percentage:.2f}%)\n")
-        f.write("\nNote: Error positions are absolute positions (1-indexed from start of input sequence)\n")
+        f.write(f"- empty output: {errors_by_type['empty output']}\n")
+        f.write(f"- failed at last position: {errors_by_type['failed at last position']}\n")
+        if not args.no_separator:
+            f.write("- failed at absolute position (1-indexed):\n")
+            for pos, count in sorted(errors_by_type["failed at position"].items()):
+                percentage = (count / total) * 100
+                f.write(f"  - position {pos}: {count} ({percentage:.2f}%)\n")
     
     print(f"\nResults saved to: {output_file}")
 
