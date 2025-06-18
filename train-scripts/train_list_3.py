@@ -33,6 +33,7 @@ parser.add_argument('--is_sorted', type=str, default="True", help='Whether lists
 parser.add_argument('--num_list_copies', type=int, default=5, help='Number of copies per list')
 parser.add_argument('--use_identity_embeddings', type=bool, default=False, help='Use identity matrix for embeddings (default: False)')
 parser.add_argument('--use_fixed_positions', type=bool, default=False, help='Use fixed positional embeddings (default: False)')
+parser.add_argument('--use_identity_output_projection', type=bool, default=False, help='Use identity matrix for attention output projection (default: False)')
 parser.add_argument('--fixed_length', type=int, default=None, help='Fixed length of lists if specified')
 parser.add_argument('--permutation_type', type=str, default="reversal", help='Type of permutation (default: reversal)')
 args = parser.parse_args()
@@ -48,6 +49,7 @@ is_sorted = args.is_sorted
 num_list_copies = args.num_list_copies
 use_identity_embeddings = args.use_identity_embeddings  # Default is False (use learned embeddings)
 use_fixed_positions = args.use_fixed_positions  # Default is False (use learnable positional embeddings)
+use_identity_output_projection = args.use_identity_output_projection  # Default is False (use learned output projection)
 fixed_length = args.fixed_length
 permutation_type = args.permutation_type
 
@@ -70,13 +72,21 @@ if use_fixed_positions and n_embd <= block_size:
 # Add embedding configuration to the config string
 embedding_suffix = ""
 # Only add suffix for non-default configurations
-if use_identity_embeddings and use_fixed_positions:
+if use_identity_embeddings and use_fixed_positions and use_identity_output_projection:
+    embedding_suffix = "_identity_fixed_identityout"
+elif use_identity_embeddings and use_fixed_positions and not use_identity_output_projection:
     embedding_suffix = "_identity_fixed"
-elif use_identity_embeddings and not use_fixed_positions:
+elif use_identity_embeddings and not use_fixed_positions and use_identity_output_projection:
+    embedding_suffix = "_identity_nofixed_identityout"
+elif use_identity_embeddings and not use_fixed_positions and not use_identity_output_projection:
     embedding_suffix = "_identity_nofixed"
-elif not use_identity_embeddings and use_fixed_positions:
+elif not use_identity_embeddings and use_fixed_positions and use_identity_output_projection:
+    embedding_suffix = "_learned_fixed_identityout"
+elif not use_identity_embeddings and use_fixed_positions and not use_identity_output_projection:
     embedding_suffix = "_learned_fixed"
-# For the default settings (learned + no fixed), use empty string
+elif not use_identity_embeddings and not use_fixed_positions and use_identity_output_projection:
+    embedding_suffix = "_learned_nofixed_identityout"
+# For the default settings (learned + no fixed + no identity output), use empty string
 
 # Add no_mlp suffix
 no_mlp_suffix = "_no_mlp"
@@ -223,7 +233,8 @@ model_args = dict(
     vocab_size=None, 
     dropout=dropout,
     use_identity_embeddings=use_identity_embeddings,
-    use_fixed_positions=use_fixed_positions
+    use_fixed_positions=use_fixed_positions,
+    use_identity_output_projection=use_identity_output_projection
 )
 
 if init_from == 'scratch':
@@ -242,9 +253,9 @@ elif init_from == 'resume':
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 
-              'use_identity_embeddings', 'use_fixed_positions']:
+              'use_identity_embeddings', 'use_fixed_positions', 'use_identity_output_projection']:
         # Handle the case where older checkpoints don't have the new parameters
-        if k in ['use_identity_embeddings', 'use_fixed_positions'] and k not in checkpoint_model_args:
+        if k in ['use_identity_embeddings', 'use_fixed_positions', 'use_identity_output_projection'] and k not in checkpoint_model_args:
             continue
         model_args[k] = checkpoint_model_args[k]
     # create the model
@@ -264,6 +275,7 @@ elif init_from == 'resume':
 # Log the embedding configuration
 print(f"Using identity embeddings: {model_args.get('use_identity_embeddings', False)}")
 print(f"Using fixed positions: {model_args.get('use_fixed_positions', False)}")
+print(f"Using identity output projection: {model_args.get('use_identity_output_projection', False)}")
 print(f"Model architecture: NO MLP (attention-only)")
 
 if use_fixed_positions:
