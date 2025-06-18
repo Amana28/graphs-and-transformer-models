@@ -1,13 +1,10 @@
 """
 Third update of model.py without MLP layer
 """
-
 import math
 import inspect
 from dataclasses import dataclass
-
 import os
-
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -32,6 +29,37 @@ class LayerNorm(nn.Module):
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
+class IdentityProjection(nn.Module):
+    """Identity projection layer that acts like nn.Linear but with fixed identity weights"""
+    def __init__(self, in_features, out_features, bias=True):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        
+        # Create identity matrix (or truncated/padded version)
+        if in_features == out_features:
+            # Perfect identity
+            identity_weight = torch.eye(out_features, in_features)
+        elif in_features > out_features:
+            # Truncate: take first out_features columns
+            identity_weight = torch.eye(out_features, in_features)
+        else:
+            # Pad: identity for first in_features, zeros for rest
+            identity_weight = torch.zeros(out_features, in_features)
+            identity_weight[:in_features, :] = torch.eye(in_features)
+        
+        # Register as buffer (non-trainable)
+        self.register_buffer('weight', identity_weight)
+        
+        # Bias handling
+        if bias:
+            self.bias = nn.Parameter(torch.zeros(out_features))
+        else:
+            self.register_parameter('bias', None)
+    
+    def forward(self, input):
+        return F.linear(input, self.weight, self.bias)
+
 class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
@@ -39,8 +67,11 @@ class CausalSelfAttention(nn.Module):
         assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads, but in a batch
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
-        # output projection
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        # output projection - either learned or identity
+        if config.use_identity_output_projection:
+            self.c_proj = IdentityProjection(config.n_embd, config.n_embd, bias=config.bias)
+        else:
+            self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
@@ -116,6 +147,7 @@ class GPTConfig:
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     use_identity_embeddings: bool = False  # Whether to use identity matrix for token embeddings
     use_fixed_positions: bool = False  # Whether to use fixed positional embeddings (identity matrix)
+    use_identity_output_projection: bool = False  # Whether to use identity matrix for attention output projection
 
 class IdentityEmbedding(nn.Module):
     """Identity embedding layer - creates one-hot vectors for input tokens"""
@@ -311,7 +343,7 @@ class GPT(nn.Module):
         assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
         override_args = override_args or {} # default to empty dict
         # only dropout can be overridden see more notes below
-        assert all(k in ['dropout', 'use_identity_embeddings', 'use_fixed_positions'] for k in override_args)
+        assert all(k in ['dropout', 'use_identity_embeddings', 'use_fixed_positions', 'use_identity_output_projection'] for k in override_args)
         from transformers import GPT2LMHeadModel
         print("loading weights from pretrained gpt: %s" % model_type)
 
@@ -330,6 +362,7 @@ class GPT(nn.Module):
         # Set default values for our new parameters
         config_args['use_identity_embeddings'] = False
         config_args['use_fixed_positions'] = False
+        config_args['use_identity_output_projection'] = False
         
         # Handle overrides
         for k, v in override_args.items():
@@ -347,6 +380,10 @@ class GPT(nn.Module):
         # For fixed positions, we don't need to load positional embeddings
         if config_args['use_fixed_positions']:
             print("Using fixed positions, not loading positional embeddings from pretrained model")
+        
+        # For identity output projection, we don't need to load c_proj weights
+        if config_args['use_identity_output_projection']:
+            print("Using identity output projection, not loading attention output projection weights from pretrained model")
         
         sd = model.state_dict()
         sd_keys = sd.keys()
@@ -374,6 +411,11 @@ class GPT(nn.Module):
         # Skip positional embeddings if using fixed positions
         if config_args['use_fixed_positions']:
             sd_keys_hf = [k for k in sd_keys_hf if not k.startswith('transformer.wpe')]
+        
+        # Skip attention output projection if using identity
+        if config_args['use_identity_output_projection']:
+            sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('attn.c_proj.weight') and not k.endswith('attn.c_proj.bias')]
+            sd_keys = [k for k in sd_keys if not k.endswith('attn.c_proj.weight') and not k.endswith('attn.c_proj.bias')]
         
         # Remove MLP-related keys from pretrained model
         sd_keys_hf = [k for k in sd_keys_hf if not any(mlp_key in k for mlp_key in ['mlp.c_fc', 'mlp.c_proj', 'ln_2'])]
@@ -417,7 +459,7 @@ class GPT(nn.Module):
         decay = set()
         no_decay = set()
         whitelist_weight_modules = (torch.nn.Linear, )
-        blacklist_weight_modules = (torch.nn.LayerNorm, LayerNorm, torch.nn.Embedding, IdentityEmbedding)
+        blacklist_weight_modules = (torch.nn.LayerNorm, LayerNorm, torch.nn.Embedding, IdentityEmbedding, IdentityProjection)
         for mn, m in self.named_modules():
             for pn, p in m.named_parameters():
                 fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
