@@ -78,6 +78,7 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
+        self.use_identity_V = config.use_identity_V
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         # self.flash = False
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
@@ -95,6 +96,13 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # Apply identity V if configured
+        if self.use_identity_V:
+            # Replace v with identity-based values
+            # v should be the input x transformed to match the attention head dimensions
+            x_reshaped = x.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+            v = x_reshaped
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -148,6 +156,7 @@ class GPTConfig:
     use_identity_embeddings: bool = False  # Whether to use identity matrix for token embeddings
     use_fixed_positions: bool = False  # Whether to use fixed positional embeddings (identity matrix)
     use_identity_output_projection: bool = False  # Whether to use identity matrix for attention output projection
+    use_identity_V: bool = False  # Whether to use identity matrix for V projection
 
 class IdentityEmbedding(nn.Module):
     """Identity embedding layer - creates one-hot vectors for input tokens"""
@@ -343,7 +352,7 @@ class GPT(nn.Module):
         assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
         override_args = override_args or {} # default to empty dict
         # only dropout can be overridden see more notes below
-        assert all(k in ['dropout', 'use_identity_embeddings', 'use_fixed_positions', 'use_identity_output_projection'] for k in override_args)
+        assert all(k in ['dropout', 'use_identity_embeddings', 'use_fixed_positions', 'use_identity_output_projection', 'use_identity_V'] for k in override_args)
         from transformers import GPT2LMHeadModel
         print("loading weights from pretrained gpt: %s" % model_type)
 
@@ -363,6 +372,7 @@ class GPT(nn.Module):
         config_args['use_identity_embeddings'] = False
         config_args['use_fixed_positions'] = False
         config_args['use_identity_output_projection'] = False
+        config_args['use_identity_V'] = False
         
         # Handle overrides
         for k, v in override_args.items():
