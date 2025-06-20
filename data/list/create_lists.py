@@ -54,6 +54,7 @@ def apply_permutation(input_list, permutation_type="reversal", fixed_indices=Non
                           "random" - apply a random permutation
                           "manual" - apply the specific permutation from the manual example
                           "custom" - compare n-2 and n-1 elements, append 1st or 2nd element based on comparison
+                          "copy" - return a forward copy of the input sequence (identity permutation)
         fixed_indices: Optional fixed permutation indices to use for "random" type
     
     Returns:
@@ -116,6 +117,10 @@ def apply_permutation(input_list, permutation_type="reversal", fixed_indices=Non
                 result.append(input_list[0])  # Fallback if only 1 element
         
         return result
+    
+    elif permutation_type == "copy":
+        # Copy permutation: return a forward copy of the input sequence (identity permutation)
+        return input_list.copy()
     
     else:
         # Default to returning the original list
@@ -202,8 +207,8 @@ if __name__ == "__main__":
     parser.add_argument('--chance_in_train', type=float, default=0.7, 
                         help='ratio of training set -- the rest is validation')  
     parser.add_argument('--permutation_type', type=str, default="reversal",
-                        choices=["reversal", "random", "manual", "custom"],
-                        help='Type of permutation to apply (reversal, random, manual, or custom)')
+                        choices=["reversal", "random", "manual", "custom", "copy"],
+                        help='Type of permutation to apply (reversal, random, manual, custom, or copy)')
     parser.add_argument('--include_separator', type=lambda x: (str(x).lower() == 'true'), default=True,
                         help='Include % separator between original sequence and permutation (default: True)')
     parser.add_argument('--seed', type=int, default=42,
