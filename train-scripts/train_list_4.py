@@ -1,473 +1,282 @@
-"""
-Training script for no-MLP model 
-"""
 import os
-import sys
-import time
-import math
-import pickle
-from contextlib import nullcontext
+import random
 import argparse
-import numpy as np
-import torch
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group
-import re
-# Add the parent directory to the Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model.updated_model_4 import GPTConfig, GPT  # Updated import
-from logger import get_logger
-import logging
 
-# -----------------------------------------------------------------------------
-# the input parameters
-parser = argparse.ArgumentParser(description='Training of the NanoGPT without MLP layers.')
-parser.add_argument('--dataset', type=str, default='list', help='Name of the dataset to use')  
-parser.add_argument('--n_layer', type=int, default=1, help='Number of layers (default: 1)')  
-parser.add_argument('--n_head', type=int, default=1, help='Number of attention heads (default: 1)')  
-parser.add_argument('--n_embd', type=int, default=120, help='Size of the embeddings (default: 120)')
-parser.add_argument('--max_iters', type=int, default=10000, help='Number of Iterations (default: 10000)')
-parser.add_argument('--min_value', type=int, default=0, help='Min value in lists')
-parser.add_argument('--max_value', type=int, default=100, help='Max value in lists')
-parser.add_argument('--is_sorted', type=str, default="True", help='Whether lists are sorted')
-parser.add_argument('--num_list_copies', type=int, default=5, help='Number of copies per list')
-parser.add_argument('--use_identity_embeddings', type=bool, default=False, help='Use identity matrix for embeddings (default: False)')
-parser.add_argument('--use_fixed_positions', type=bool, default=False, help='Use fixed positional embeddings (default: False)')
-parser.add_argument('--use_identity_output_projection', type=bool, default=False, help='Use identity matrix for attention output projection (default: False)')
-parser.add_argument('--use_identity_V', type=bool, default=False, help='Use identity matrix for V projection (default: False)')
-parser.add_argument('--fixed_length', type=int, default=None, help='Fixed length of lists if specified')
-parser.add_argument('--permutation_type', type=str, default="reversal", help='Type of permutation (default: reversal)')
-args = parser.parse_args()
-
-dataset = args.dataset
-n_layer = args.n_layer
-n_head = args.n_head
-n_embd = args.n_embd
-max_iters = args.max_iters
-min_value = args.min_value
-max_value = args.max_value
-is_sorted = args.is_sorted
-num_list_copies = args.num_list_copies
-use_identity_embeddings = args.use_identity_embeddings  # Default is False (use learned embeddings)
-use_fixed_positions = args.use_fixed_positions  # Default is False (use learnable positional embeddings)
-use_identity_output_projection = args.use_identity_output_projection  # Default is False (use learned output projection)
-use_identity_V = args.use_identity_V  # Default is False (use learned V projection)
-fixed_length = args.fixed_length
-permutation_type = args.permutation_type
-
-# Determine list type directory
-list_type = "sorted" if is_sorted == "True" else "unsorted"
-length_type = f"fixed{fixed_length}" if fixed_length is not None else "variable"
-data_dir = os.path.join('data', f'{dataset}/{list_type}/{length_type}/{min_value}-{max_value}/{permutation_type}')
-
-with open(os.path.join(data_dir, 'meta.pkl'), 'rb') as f:
-    meta = pickle.load(f)
+def generate_random_list(min_value, max_value, min_length, max_length, is_sorted, fixed_length=None, only_min_max_length=False):
+    """
+    Generate a random list of integers with variable or fixed length.
     
-stoi, itos = meta['stoi'], meta['itos']
-block_size = meta['block_size']
-
-# Validate n_embd vs block_size for fixed positions
-if use_fixed_positions and n_embd <= block_size:
-    raise ValueError(f"When using fixed positions, n_embd ({n_embd}) must be larger than block_size ({block_size}). "
-                     f"Suggestion: use n_embd >= {block_size + 32}")
-
-
-# Add embedding configuration to the config string
-embedding_suffix = ""
-
-# Handle all 16 possible combinations (2^4 = 16 cases)
-if use_identity_embeddings and use_fixed_positions and use_identity_output_projection and use_identity_V:
-    embedding_suffix = "_identityE_fixedP_identityWo_identityV"
-elif use_identity_embeddings and use_fixed_positions and use_identity_output_projection and not use_identity_V:
-    embedding_suffix = "_identityE_fixedP_identityWo"
-elif use_identity_embeddings and use_fixed_positions and not use_identity_output_projection and use_identity_V:
-    embedding_suffix = "_identityE_fixedP_identityV"
-elif use_identity_embeddings and use_fixed_positions and not use_identity_output_projection and not use_identity_V:
-    embedding_suffix = "_identityE_fixedP"
-elif use_identity_embeddings and not use_fixed_positions and use_identity_output_projection and use_identity_V:
-    embedding_suffix = "_identityE_identityWo_identityV"
-elif use_identity_embeddings and not use_fixed_positions and use_identity_output_projection and not use_identity_V:
-    embedding_suffix = "_identityE_identityWo"
-elif use_identity_embeddings and not use_fixed_positions and not use_identity_output_projection and use_identity_V:
-    embedding_suffix = "_identityE_identityV"
-elif use_identity_embeddings and not use_fixed_positions and not use_identity_output_projection and not use_identity_V:
-    embedding_suffix = "_identityE"
-elif not use_identity_embeddings and use_fixed_positions and use_identity_output_projection and use_identity_V:
-    embedding_suffix = "_fixedP_identityWo_identityV"
-elif not use_identity_embeddings and use_fixed_positions and use_identity_output_projection and not use_identity_V:
-    embedding_suffix = "_fixedP_identityWo"
-elif not use_identity_embeddings and use_fixed_positions and not use_identity_output_projection and use_identity_V:
-    embedding_suffix = "_fixedP_identityV"
-elif not use_identity_embeddings and use_fixed_positions and not use_identity_output_projection and not use_identity_V:
-    embedding_suffix = "_fixedP"
-elif not use_identity_embeddings and not use_fixed_positions and use_identity_output_projection and use_identity_V:
-    embedding_suffix = "_identityWo_identityV"
-elif not use_identity_embeddings and not use_fixed_positions and use_identity_output_projection and not use_identity_V:
-    embedding_suffix = "_identityWo"
-elif not use_identity_embeddings and not use_fixed_positions and not use_identity_output_projection and use_identity_V:
-    embedding_suffix = "_identityV"
-else:
-    # Default case: not use_identity_embeddings and not use_fixed_positions and not use_identity_output_projection and not use_identity_V
-    embedding_suffix = ""
-
-# Add no_mlp suffix
-no_mlp_suffix = "_no_mlp"
-embedding_suffix += no_mlp_suffix
-
-log_suffix = embedding_suffix
-
-# Modify the config to include embedding settings and no_mlp
-config = f"{n_layer}_{n_head}_{n_embd}{embedding_suffix}"
-out_dir = f'out/{dataset}_{list_type}_{length_type}_{permutation_type}_{config}_{min_value}-{max_value}'
-
-# -----------------------------------------------------------------------------
-# default config values designed to train a gpt2 (124M) on OpenWebText
-# I/O
-eval_interval = max_iters // 10
-log_interval = max_iters // 100
-eval_iters = max_iters // 10
-eval_only = False # if True, script exits right after the first eval
-always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
-# wandb logging
-wandb_log = False # disabled by default
-wandb_project = 'owt'
-wandb_run_name = 'gpt2' # 'run' + str(time.time())
-# data
-gradient_accumulation_steps = 1 # used to simulate larger batch sizes
-train_batch_size = 1024 # if gradient_accumulation_steps > 1, this is the micro-batch size
-val_batch_size = 64
-batch_size = train_batch_size
-dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
-bias = False # do we use bias inside LayerNorm and Linear layers?
-# adamw optimizer
-learning_rate = 5e-4 # max learning rate 
-weight_decay = 1e-1
-beta1 = 0.9
-beta2 = 0.95
-grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
-# learning rate decay settings
-decay_lr = True # whether to decay the learning rate
-warmup_iters = max_iters//20 # how many steps to warm up for
-lr_decay_iters = max_iters # should be ~= max_iters per Chinchilla
-min_lr = learning_rate/10 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
-# DDP settings
-backend = 'nccl' # 'nccl', 'gloo', etc.
-# system
-device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
-dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-compile = True # use PyTorch 2.0 to compile the model to be faster
-
-# -----------------------------------------------------------------------------
-config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
-config = {k: globals()[k] for k in config_keys} # will be useful for logging
-# -----------------------------------------------------------------------------
-
-# various inits, derived attributes, I/O setup
-ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
-if ddp:
-    init_process_group(backend=backend)
-    ddp_rank = int(os.environ['RANK'])
-    ddp_local_rank = int(os.environ['LOCAL_RANK'])
-    ddp_world_size = int(os.environ['WORLD_SIZE'])
-    device = f'cuda:{ddp_local_rank}'
-    torch.cuda.set_device(device)
-    master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
-    seed_offset = ddp_rank # each process gets a different seed
-    assert gradient_accumulation_steps % torch.cuda.device_count() == 0
-    gradient_accumulation_steps //= torch.cuda.device_count()
-else:
-    # if not ddp, we are running on a single gpu, and one process
-    master_process = True
-    seed_offset = 0
-    ddp_world_size = 1
-
-tokens_per_iter = gradient_accumulation_steps * ddp_world_size * batch_size * block_size
-print(f"tokens per iteration will be: {tokens_per_iter:,}")
-
-if master_process:
-    os.makedirs(out_dir, exist_ok=True)
-
-torch.manual_seed(1337 + seed_offset)
-torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
-torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
-device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
-# note: float16 data type will automatically use a GradScaler
-ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
-ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
-
-# poor man's data loader
-if(num_list_copies == 0):
-    train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-else:
-    train_data = np.memmap(os.path.join(data_dir, f'train_{num_list_copies}.bin'), dtype=np.uint16, mode='r')
-    val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-
-def get_batch(split):
-    data = train_data if split == 'train' else val_data
-    batch_size = train_batch_size if split == 'train' else val_batch_size
+    Args:
+        min_value: Minimum value for generated numbers (inclusive)
+        max_value: Maximum value for generated numbers (inclusive)
+        min_length: Minimum length for the generated list (used if fixed_length is None)
+        max_length: Maximum length for the generated list (used if fixed_length is None)
+        is_sorted: Boolean flag indicating if the list should be sorted
+        fixed_length: If provided, all lists will have exactly this length
+        only_min_max_length: If True, length will be randomly chosen between min_length and max_length only
+                            (not any values in between)
     
-    data_size = block_size + 1
-    data = train_data if split == 'train' else val_data
-    ix = torch.randint( (len(data) - data_size)//data_size , (batch_size,)) * data_size
-    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-    
-    if device_type == 'cuda':
-        # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
-        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+    Returns:
+        A random list of integers
+    """
+    # Determine the length of this particular list
+    if fixed_length is not None:
+        length = fixed_length
+    elif only_min_max_length:
+        # Choose randomly between min_length and max_length only
+        length = random.choice([min_length, max_length])
     else:
-        x, y = x.to(device), y.to(device)
-    return x, y
-
-# init these up here, can override if init_from='resume' (i.e. from a checkpoint)
-iter_num = 0
-best_val_loss = 1e9
-
-# logger
-if(num_list_copies == 0):
-    logger = get_logger(os.path.join(out_dir, f"no_output_train{log_suffix}.log"))
-    log_file_name = os.path.join(out_dir, f"train{log_suffix}.log")
-else:
-    logger = get_logger(os.path.join(out_dir, f'no_output_train_{num_list_copies}{log_suffix}.log'))
-    log_file_name = os.path.join(out_dir, f"train_{num_list_copies}{log_suffix}.log")
-
-# attempt to derive vocab_size from the dataset
-meta_path = os.path.join(data_dir, 'meta.pkl')
-meta_vocab_size = None
-if os.path.exists(meta_path):
-    with open(meta_path, 'rb') as f:
-        meta = pickle.load(f)
-    meta_vocab_size = meta['vocab_size']
-    print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
+        length = random.randint(min_length, max_length)
     
-stoi, itos = meta['stoi'], meta['itos']
-decode = lambda l: ''.join([itos[i] for i in l])
-
-# model init
-model_args = dict(
-    n_layer=n_layer, 
-    n_head=n_head, 
-    n_embd=n_embd, 
-    block_size=block_size,
-    bias=bias, 
-    vocab_size=None, 
-    dropout=dropout,
-    use_identity_embeddings=use_identity_embeddings,
-    use_fixed_positions=use_fixed_positions,
-    use_identity_output_projection=use_identity_output_projection,
-    use_identity_V=use_identity_V
-)
-
-if init_from == 'scratch':
-    print("Initializing a new model from scratch (NO MLP)")
-    if meta_vocab_size is None:
-        print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
-    model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
-    gptconf = GPTConfig(**model_args)
-    model = GPT(gptconf)
-elif init_from == 'resume':
-    print(f"Resuming training from {out_dir}")
-    # resume training from a checkpoint.
-    ckpt_path = os.path.join(out_dir, 'ckpt.pt')
-    checkpoint = torch.load(ckpt_path, map_location=device)
-    checkpoint_model_args = checkpoint['model_args']
-    # force these config attributes to be equal otherwise we can't even resume training
-    # the rest of the attributes (e.g. dropout) can stay as desired from command line
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 
-              'use_identity_embeddings', 'use_fixed_positions', 'use_identity_output_projection', 'use_identity_V']:
-        # Handle the case where older checkpoints don't have the new parameters
-        if k in ['use_identity_embeddings', 'use_fixed_positions', 'use_identity_output_projection', 'use_identity_V'] and k not in checkpoint_model_args:
-            continue
-        model_args[k] = checkpoint_model_args[k]
-    # create the model
-    gptconf = GPTConfig(**model_args)
-    model = GPT(gptconf)
-    state_dict = checkpoint['model']
-    # fix the keys of the state dictionary :(
-    # honestly no idea how checkpoints sometimes get this prefix, have to debug more
-    unwanted_prefix = '_orig_mod.'
-    for k,v in list(state_dict.items()):
-        if k.startswith(unwanted_prefix):
-            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-    model.load_state_dict(state_dict)
-    iter_num = checkpoint['iter_num']
-    best_val_loss = checkpoint['best_val_loss']
-
-# Log the embedding configuration
-print(f"Using identity embeddings: {model_args.get('use_identity_embeddings', False)}")
-print(f"Using fixed positions: {model_args.get('use_fixed_positions', False)}")
-print(f"Using identity output projection: {model_args.get('use_identity_output_projection', False)}")
-print(f"Using identity V: {model_args.get('use_identity_V', False)}")
-print(f"Model architecture: NO MLP (attention-only)")
-
-if use_fixed_positions:
-    token_emb_dim = n_embd - block_size
-    pos_emb_dim = block_size
-    print(f"Embedding breakdown: {token_emb_dim} token dims + {pos_emb_dim} positional dims = {n_embd} total")
-
-if block_size < model.config.block_size:
-    model.crop_block_size(block_size)
-    model_args['block_size'] = block_size # so that the checkpoint will have the right value
-
-model.to(device)
-
-# initialize a GradScaler. If enabled=False scaler is a no-op
-scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
-
-# optimizer
-optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
-if init_from == 'resume':
-    optimizer.load_state_dict(checkpoint['optimizer'])
-checkpoint = None # free up memory
-
-# compile the model
-if compile:
-    print("compiling the model... (takes a ~minute)")
-    unoptimized_model = model
-    model = torch.compile(model) # requires PyTorch 2.0
-
-# wrap model into DDP container
-if ddp:
-    model = DDP(model, device_ids=[ddp_local_rank])
-
-# helps estimate an arbitrarily accurate loss over either split using many batches
-@torch.no_grad()
-def estimate_loss():
-    out = {}
-    model.eval()
-    for split in ['train', 'val']:
-        losses = torch.zeros(eval_iters)
-        for k in range(eval_iters):
-            X, Y = get_batch(split)
-            with ctx:
-                _, loss = model(X, Y)
-            losses[k] = loss.item() 
-        out[split] = losses.mean()
-    model.train()
-    return out
-
-# learning rate decay scheduler (cosine with warmup)
-def get_lr(it):
-    # 1) linear warmup for warmup_iters steps
-    if it < warmup_iters:
-        return learning_rate * it / warmup_iters
-    # 2) if it > lr_decay_iters, return min learning rate
-    if it > lr_decay_iters:
-        return min_lr
-    # 3) in between, use cosine decay down to min learning rate
-    decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
-    assert 0 <= decay_ratio <= 1
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
-    return min_lr + coeff * (learning_rate - min_lr)
-
-def open_and_append(filename, text):
-    with open(filename, 'a') as file:
-        file.write(text + '\n')
-
-# logging
-if wandb_log and master_process:
-    import wandb
-    wandb.init(project=wandb_project, name=wandb_run_name, config=config)
-
-# training loop
-X, Y = get_batch('train') # fetch the very first batch
-t0 = time.time()
-local_iter_num = 0 # number of iterations in the lifetime of this process
-raw_model = model.module if ddp else model # unwrap DDP container if needed
-running_mfu = -1.0
-accuracy = []
-corrects = []
-totals = []
-
-while True:
+    # Generate the list with unique random numbers
+    # If the range is smaller than requested length, limit to range size
+    range_size = max_value - min_value + 1
+    if length > range_size:
+        length = range_size
+        
+    # Generate unique numbers
+    rand_list = random.sample(range(min_value, max_value + 1), length)
     
-    # determine and set the learning rate for this iteration
-    lr = get_lr(iter_num) if decay_lr else learning_rate
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+    # Sort if required
+    if is_sorted:
+        rand_list.sort()
+    
+    return rand_list
 
-    # evaluate the loss on train/val sets and write checkpoints
-    if iter_num % eval_interval == 0 and master_process:
-        losses = estimate_loss()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-        logger.info(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-        open_and_append(log_file_name, f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-        if wandb_log:
-            wandb.log({
-                "iter": iter_num,
-                "train/loss": losses['train'],
-                "val/loss": losses['val'],
-                "lr": lr,
-                "mfu": running_mfu*100, # convert to percentage
-            })
-        if losses['val'] < best_val_loss or always_save_checkpoint:
-            best_val_loss = losses['val']
-            if iter_num > 0:
-                checkpoint = {
-                    'model': raw_model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'model_args': model_args,
-                    'iter_num': iter_num,
-                    'best_val_loss': best_val_loss,
-                    'config': config,
-                }
-                print(f"saving checkpoint to {out_dir}")
-                logger.info(f"saving checkpoint to {out_dir}")
-                open_and_append(log_file_name, f"saving checkpoint to {out_dir}")
+def apply_permutation(input_list, permutation_type="reversal", fixed_indices=None):
+    """
+    Apply a permutation to the input list based on the specified type.
+    
+    Args:
+        input_list: The original list to permute
+        permutation_type: Type of permutation to apply
+                          "reversal" - simply reverse the list
+                          "random" - apply a random permutation
+                          "manual" - apply the specific permutation from the manual example
+                          "custom" - compare n-2 and n-1 elements, append 1st or 2nd element based on comparison
+                          "copy" - return a forward copy of the input sequence (identity permutation)
+        fixed_indices: Optional fixed permutation indices to use for "random" type
+    
+    Returns:
+        The permuted list
+    """
+    if permutation_type == "reversal":
+        # Simply reverse the list
+        return list(reversed(input_list))
+    
+    elif permutation_type == "random":
+        # For random permutation with fixed length, use the provided indices
+        if fixed_indices is not None:
+            return [input_list[i] for i in fixed_indices]
+        else:
+            # Fallback to truly random permutation if no fixed indices provided
+            indices = list(range(len(input_list)))
+            random.shuffle(indices)
+            return [input_list[i] for i in indices]
+    
+    elif permutation_type == "manual":
+        # The specific manual example permutation: σ(1)=2, σ(2)=6, σ(3)=5, σ(4)=4, σ(5)=3, σ(6)=1
+        # Map: 1→2, 2→6, 3→5, 4→4, 5→3, 6→1
+        # For arbitrary length lists, we'll extend this pattern cyclically
+        
+        # Define the mapping from the manual example (zero-indexed)
+        manual_map = {0: 1, 1: 5, 2: 4, 3: 3, 4: 2, 5: 0}
+        
+        # Apply the mapping to each position, cycling for lists longer than 6
+        permuted_list = []
+        for i in range(len(input_list)):
+            mapped_i = manual_map.get(i % 6, i)  # Cycle through the map for longer lists
+            if mapped_i < len(input_list):
+                permuted_list.append(input_list[mapped_i])
+            else:
+                # Fallback for edge cases when the mapping is out of bounds
+                permuted_list.append(input_list[i])
                 
-                # Don't add embedding configuration to checkpoint filename
-                if num_list_copies == 0:
-                    torch.save(checkpoint, os.path.join(out_dir, f'{iter_num}_ckpt.pt'))
-                else:
-                    torch.save(checkpoint, os.path.join(out_dir, f'{iter_num}_ckpt_{num_list_copies}.pt'))
+        return permuted_list
     
-    if iter_num == 0 and eval_only:
-        break
+    elif permutation_type == "custom":
+        # Custom permutation: compare n-2 and n-1 elements, append 1st or 2nd element
+        if len(input_list) < 2:
+            # If list has less than 2 elements, just return a copy
+            return input_list.copy()
+        
+        # Start with the original list
+        result = input_list.copy()
+        
+        # Compare n-2 and n-1 elements (last two elements)
+        n_minus_2 = input_list[-2]  # n-2 element
+        n_minus_1 = input_list[-1]  # n-1 element
+        
+        # Add 1st element if n-2 < n-1, otherwise add 2nd element
+        if n_minus_2 < n_minus_1:
+            result.append(input_list[0])  # 1st element
+        else:
+            if len(input_list) >= 2:
+                result.append(input_list[1])  # 2nd element
+            else:
+                result.append(input_list[0])  # Fallback if only 1 element
+        
+        return result
+    
+    elif permutation_type == "copy":
+        # Copy permutation: return a forward copy of the input sequence (identity permutation)
+        return input_list.copy()
+    
+    else:
+        # Default to returning the original list
+        return input_list
 
-    # forward backward update, with optional gradient accumulation to simulate larger batch size
-    # and using the GradScaler if data type is float16
-    for micro_step in range(gradient_accumulation_steps):
-        if ddp:
-            model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
-        with ctx:
-            logits, loss = model(X, Y)
-            loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
-        X, Y = get_batch('train')
-        # backward pass, with gradient scaling if training in fp16
-        scaler.scale(loss).backward()
-    
-    # clip the gradient
-    if grad_clip != 0.0:
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-    
-    scaler.step(optimizer)
-    scaler.update()
-    optimizer.zero_grad(set_to_none=True)
-    
-    # timing and logging
-    t1 = time.time()
-    dt = t1 - t0
-    t0 = t1
-    if iter_num % log_interval == 0 and master_process:
-        lossf = loss.item() * gradient_accumulation_steps
-        if local_iter_num >= 5: # let the training loop settle a bit
-            mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
-            running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
-        logger.info(f"iter {iter_num}: loss {lossf:.4f}")
-        open_and_append(log_file_name, f"iter {iter_num}: loss {lossf:.4f}")
-    
-    iter_num += 1
-    local_iter_num += 1
-    
-    if iter_num > max_iters:
-        break
+def format_list(rand_list, permuted_list, include_separator=True):
+    """Format the list as a string with an optional '%' separator."""
+    if include_separator:
+        return " ".join(map(str, rand_list)) + " % " + " ".join(map(str, permuted_list)) + "\n"
+    else:
+        return " ".join(map(str, permuted_list)) + "\n"
 
-torch.save(torch.tensor(corrects).cpu(), os.path.join(out_dir, f'corrects{log_suffix}.pt'))
-torch.save(torch.tensor(totals).cpu(), os.path.join(out_dir, f'totals{log_suffix}.pt'))
+def generate_datasets(args, fixed_indices=None):
+    """Generate training and validation datasets according to the specified parameters."""
+    all_lists = []
+    
+    # Generate the requested number of unique lists
+    for _ in range(args.num_lists):
+        rand_list = generate_random_list(
+            args.min_value, 
+            args.max_value, 
+            args.min_length, 
+            args.max_length,
+            args.is_sorted,
+            args.fixed_length,
+            args.only_min_max_length
+        )
+        
+        # Apply the selected permutation
+        permuted_list = apply_permutation(rand_list, args.permutation_type, fixed_indices)
+        
+        formatted_list = format_list(rand_list, permuted_list, args.include_separator)
+        all_lists.append(formatted_list)
+    
+    # Shuffle the generated lists
+    random.shuffle(all_lists)
+    
+    # Split into training and validation sets
+    train_size = int(args.num_lists * args.chance_in_train)
+    train_lists = all_lists[:train_size]
+    val_lists = all_lists[train_size:]
+    
+    # Repeat lists in training set as specified
+    expanded_train_lists = []
+    for list_item in train_lists:
+        expanded_train_lists.extend([list_item] * args.num_list_copies)
+    
+    # Shuffle the expanded training set
+    random.shuffle(expanded_train_lists)
+    
+    return expanded_train_lists, val_lists
 
-if ddp:
-    destroy_process_group()
+def write_dataset(dataset, file_path):
+    """Write the dataset to a file."""
+    with open(file_path, "w") as file:
+        for item in dataset:
+            file.write(item)
+
+def save_indices(indices, file_path):
+    """Save the permutation indices to a file for reference."""
+    with open(file_path, "w") as file:
+        file.write(",".join(map(str, indices)))
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Generate a random list based on the given parameters')      
+    parser.add_argument('--is_sorted', type=lambda x: (str(x).lower() == 'true'), default=True, 
+                        help='A boolean flag indicating sorted status')       
+    parser.add_argument('--min_value', type=int, default=0, 
+                        help='min value for generated numbers -- inclusive ')       
+    parser.add_argument('--max_value', type=int, default=100, 
+                        help='max value for generated numbers -- inclusive')     
+    parser.add_argument('--min_length', type=int, default=1, 
+                        help='min length for the generated lists (when using variable length)')         
+    parser.add_argument('--max_length', type=int, default=50, 
+                        help='max length for the generated lists (when using variable length)')
+    parser.add_argument('--fixed_length', type=int, default=None,
+                        help='If provided, all lists will be this exact length (overrides min/max length)')
+    parser.add_argument('--only_min_max_length', type=lambda x: (str(x).lower() == 'true'), default=False,
+                        help='If True, randomly choose between min_length and max_length only (not values in between)')
+    parser.add_argument('--num_list_copies', type=int, default=1, 
+                        help='the number of times each list is repeated in the training data.')  
+    parser.add_argument('--num_lists', type=int, default=10000, 
+                        help='the total number of generated lists')       
+    parser.add_argument('--chance_in_train', type=float, default=0.7, 
+                        help='ratio of training set -- the rest is validation')  
+    parser.add_argument('--permutation_type', type=str, default="reversal",
+                        choices=["reversal", "random", "manual", "custom", "copy"],
+                        help='Type of permutation to apply (reversal, random, manual, custom, or copy)')
+    parser.add_argument('--include_separator', type=lambda x: (str(x).lower() == 'true'), default=True,
+                        help='Include % separator between original sequence and permutation (default: True)')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for reproducibility')
+    
+    args = parser.parse_args()
+    
+    # Set random seed for reproducibility
+    random.seed(args.seed)
+    
+    # Determine the folder path based on sorted status and length type
+    length_type = f"fixed{args.fixed_length}" if args.fixed_length is not None else "variable"
+    perm_type = args.permutation_type
+    
+    if args.is_sorted:
+        folder_name = f"data/list/sorted/{length_type}/{args.min_value}-{args.max_value}/{perm_type}"
+    else:
+        folder_name = f"data/list/unsorted/{length_type}/{args.min_value}-{args.max_value}/{perm_type}"
+    
+    # Create directories if they don't exist
+    os.makedirs(folder_name, exist_ok=True)
+    
+    # For random permutation type with fixed length, generate a single set of indices
+    fixed_indices = None
+    if args.permutation_type == "random" and args.fixed_length is not None:
+        # Generate a random permutation of the fixed length
+        fixed_indices = list(range(args.fixed_length))
+        random.shuffle(fixed_indices)
+        
+        # Save the indices to a file for reference
+        indices_file = os.path.join(folder_name, "random_indices.txt")
+        save_indices(fixed_indices, indices_file)
+        print(f"Generated and saved random permutation indices to {indices_file}")
+    
+    # Generate datasets
+    train_lists, val_lists = generate_datasets(args, fixed_indices)
+    
+    # Write datasets to files
+    train_file = os.path.join(folder_name, f'train_{args.num_list_copies}.txt')
+    val_file = os.path.join(folder_name, 'test.txt')
+    
+    write_dataset(train_lists, train_file)
+    write_dataset(val_lists, val_file)
+    
+    # Save the permutation indices in a separate file
+    if args.permutation_type == "random" and fixed_indices is not None:
+        permutation_file = os.path.join(folder_name, "permutation_indices.txt")
+        with open(permutation_file, "w") as f:
+            # Save indices with their positions for better readability
+            for i, idx in enumerate(fixed_indices):
+                f.write(f"{i} -> {idx}\n")
+            
+            # Also save as comma-separated on a single line
+            f.write("\n# Comma-separated format:\n")
+            f.write(",".join(map(str, fixed_indices)))
+        
+        print(f"Detailed permutation mapping saved to: {permutation_file}")
+    
+    # Print summary message with length information
+    length_info = f"fixed length of {args.fixed_length}" if args.fixed_length is not None else f"variable length ({args.min_length}-{args.max_length})"
+    if args.only_min_max_length and args.fixed_length is None:
+        length_info = f"only {args.min_length} or {args.max_length} length"
+    sort_info = "sorted" if args.is_sorted else "unsorted"
+    
+    print(f"Generated {sort_info} lists with {length_info} using {perm_type} permutation:")
+    print(f"- {len(train_lists)} training examples ({len(train_lists)/args.num_list_copies} unique lists × {args.num_list_copies} copies)")
+    print(f"- {len(val_lists)} validation examples")
+    if args.permutation_type == "random" and fixed_indices is not None:
+        print(f"- Using fixed random permutation indices: {fixed_indices[:10]}...")
+    print(f"Training data saved to: {train_file}")
+    print(f"Validation data saved to: {val_file}")

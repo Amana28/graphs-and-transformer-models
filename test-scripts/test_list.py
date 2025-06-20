@@ -25,7 +25,8 @@ def parse_args():
     parser.add_argument('--test_samples', type=int, default=-1, help='Number of test samples to evaluate (-1 for all)')
     parser.add_argument('--fixed_length', type=int, default=None, help='Fixed length of lists if specified')
     parser.add_argument('--permutation_type', type=str, default="reversal", 
-                        help='Type of permutation to apply (reversal, random, manual, custom)')
+                        choices=["reversal", "random", "manual", "custom", "copy"],
+                        help='Type of permutation to apply (reversal, random, manual, custom, copy)')
     parser.add_argument('--no_separator', action='store_true', 
                         help='Test data has no % separator, expected output is last token')
     return parser.parse_args()

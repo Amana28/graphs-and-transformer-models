@@ -11,7 +11,7 @@ parser.add_argument('--is_sorted', type=str, default=True, help='Whether the lis
 parser.add_argument('--num_list_copies', type=int, default=5, help='Number of copies of each list in training data')
 parser.add_argument('--fixed_length', type=int, default=None, help='Fixed length of lists if specified')
 parser.add_argument('--permutation_type', type=str, default="reversal", 
-                    choices=["reversal", "random", "manual", "custom"], 
+                    choices=["reversal", "random", "manual", "custom", "copy"], 
                     help='Type of permutation to apply')
 args = parser.parse_args()  
 
