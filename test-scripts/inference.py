@@ -7,7 +7,7 @@ import numpy as np
 from tqdm import tqdm
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model.updated_model_3 import GPTConfig, GPT
+from model.updated_model_4 import GPTConfig, GPT
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Inference script for transformer models on list tasks')

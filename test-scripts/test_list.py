@@ -1,7 +1,7 @@
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model.updated_model_3 import GPTConfig, GPT 
+from model.updated_model_4 import GPTConfig, GPT 
 import numpy as np
 import argparse
 import pickle
