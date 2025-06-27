@@ -53,7 +53,7 @@ def apply_permutation(input_list, permutation_type="reversal", fixed_indices=Non
                           "reversal" - simply reverse the list
                           "random" - apply a random permutation
                           "manual" - apply the specific permutation from the manual example
-                          "custom" - compare n-2 and n-1 elements, append 1st or 2nd element based on comparison
+                          "custom" - custom output
                           "copy" - return a forward copy of the input sequence (identity permutation)
         fixed_indices: Optional fixed permutation indices to use for "random" type
     

@@ -128,8 +128,8 @@ def encode(s, stoi):
 def decode(l, itos):
     return decode_string(l, itos)
 
-# Calculate block size (round up to nearest multiple of 32)
-block_size = (max(get_block_size(train_data, stoi), get_block_size(val_data, stoi)) // 32 + 1) * 32
+# Calculate block size (round up to nearest multiple of 8)
+block_size = (max(get_block_size(train_data, stoi), get_block_size(val_data, stoi)) // 8 + 1) * 8
 print(f"The block size is {block_size}")
 
 # Process the data
