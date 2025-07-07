@@ -157,7 +157,14 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
-
+# -----------------------------------------------------------------------------
+# # updated config values
+# learning_rate = 1e-3  # Increased from 5e-4 
+# warmup_iters = max_iters//40  # Shorter warmup (from //20)
+# dropout = 0.1  # Increased from 0.0 for better regularization
+# weight_decay = 0.2  # Increased from 0.1 for better regularization
+# # # Print updated config values
+# print(f"Using regularization with learning rate={learning_rate}, warmup iterations={warmup_iters}, dropout={dropout} and weight_decay={weight_decay}")
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
