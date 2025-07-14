@@ -135,8 +135,10 @@ wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
 gradient_accumulation_steps = 1 # used to simulate larger batch sizes
-train_batch_size = 1024 # if gradient_accumulation_steps > 1, this is the micro-batch size
-val_batch_size = 64
+print(f"Using Gradient Accumulation Steps: {gradient_accumulation_steps}")
+train_batch_size = 256 # if gradient_accumulation_steps > 1, this is the micro-batch size
+print(f"Using Training Batch Size: {train_batch_size}")
+val_batch_size = 128
 batch_size = train_batch_size
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
@@ -158,13 +160,13 @@ device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps'
 dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
-# # updated config values
-# learning_rate = 1e-3  # Increased from 5e-4 
-# warmup_iters = max_iters//40  # Shorter warmup (from //20)
-# dropout = 0.1  # Increased from 0.0 for better regularization
-# weight_decay = 0.2  # Increased from 0.1 for better regularization
-# # # Print updated config values
-# print(f"Using regularization with learning rate={learning_rate}, warmup iterations={warmup_iters}, dropout={dropout} and weight_decay={weight_decay}")
+# updated config values
+learning_rate = 1e-2  # Increased from 5e-4 
+warmup_iters = max_iters//40  # Shorter warmup (from //20)
+dropout = 0.1  # Increased from 0.0 for better regularization
+weight_decay = 0.2  # Increased from 0.1 for better regularization
+# # Print updated config values
+print(f"Using regularization with learning rate={learning_rate}, warmup iterations={warmup_iters}, dropout={dropout} and weight_decay={weight_decay}")
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
@@ -309,6 +311,9 @@ print(f"Using identity output projection: {model_args.get('use_identity_output_p
 print(f"Using identity V: {model_args.get('use_identity_V', False)}")
 print(f"Model architecture: NO MLP (attention-only)")
 
+# Log block size
+print(f"Block size (context window): {block_size}")
+
 if use_fixed_positions:
     token_emb_dim = n_embd - block_size
     pos_emb_dim = block_size
@@ -321,7 +326,7 @@ if block_size < model.config.block_size:
 model.to(device)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
-scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+scaler = torch.amp.GradScaler('cuda', enabled=(dtype == 'float16'))
 
 # optimizer
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
