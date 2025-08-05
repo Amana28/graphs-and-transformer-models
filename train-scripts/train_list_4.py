@@ -163,7 +163,7 @@ compile = True # use PyTorch 2.0 to compile the model to be faster
 # updated config values
 learning_rate = 1e-2  # Increased from 5e-4 
 warmup_iters = max_iters//40  # Shorter warmup (from //20)
-dropout = 0.25  # Increased from 0.0 for better regularization
+dropout = 0.1  # Increased from 0.0 for better regularization
 weight_decay = 0.2  # Increased from 0.1 for better regularization
 # # Print updated config values
 print(f"Using regularization with learning rate={learning_rate}, warmup iterations={warmup_iters}, dropout={dropout} and weight_decay={weight_decay}")
