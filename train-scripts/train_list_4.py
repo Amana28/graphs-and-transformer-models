@@ -161,10 +161,10 @@ dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto i
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 # updated config values
-learning_rate = 1e-2  # Increased from 5e-4 
-warmup_iters = max_iters//40  # Shorter warmup (from //20)
-dropout = 0.1  # Increased from 0.0 for better regularization
-weight_decay = 0.2  # Increased from 0.1 for better regularization
+learning_rate = 5e-4  # change from 5e-4 
+warmup_iters = max_iters//40  # change warmup (from //20)
+dropout = 0.0  # change from 0.0 for better regularization
+weight_decay = 0.0  # change from 0.1 for better regularization
 # # Print updated config values
 print(f"Using regularization with learning rate={learning_rate}, warmup iterations={warmup_iters}, dropout={dropout} and weight_decay={weight_decay}")
 # -----------------------------------------------------------------------------
