@@ -37,6 +37,7 @@ parser.add_argument('--use_identity_output_projection', type=bool, default=False
 parser.add_argument('--use_identity_V', type=bool, default=False, help='Use identity matrix for V projection (default: False)')
 parser.add_argument('--fixed_length', type=int, default=None, help='Fixed length of lists if specified')
 parser.add_argument('--permutation_type', type=str, default="reversal", help='Type of permutation (default: reversal)')
+parser.add_argument('--train_batch_size', type=int, default=256, help='Training batch size (default: 256)')
 args = parser.parse_args()
 
 dataset = args.dataset
@@ -136,9 +137,9 @@ wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
 gradient_accumulation_steps = 1 # used to simulate larger batch sizes
 print(f"Using Gradient Accumulation Steps: {gradient_accumulation_steps}")
-train_batch_size = 256 # if gradient_accumulation_steps > 1, this is the micro-batch size
+train_batch_size = args.train_batch_size # if gradient_accumulation_steps > 1, this is the micro-batch size
 print(f"Using Training Batch Size: {train_batch_size}")
-val_batch_size = 128
+val_batch_size = args.train_batch_size // 2
 batch_size = train_batch_size
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
@@ -162,7 +163,7 @@ compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 # updated config values
 learning_rate = 5e-4  # change from 5e-4 
-warmup_iters = max_iters//40  # change warmup (from //20)
+warmup_iters = max_iters//20  # change warmup (from //20)
 dropout = 0.0  # change from 0.0 for better regularization
 weight_decay = 0.0  # change from 0.1 for better regularization
 # # Print updated config values
