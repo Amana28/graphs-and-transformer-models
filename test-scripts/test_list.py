@@ -42,54 +42,26 @@ def decode(l, itos):
         dec = dec + itos[i] + " "
     return dec[:-1]
 
-def check_permutation_with_expected(generated, expected_output, no_separator=False):
-    """Check if the generated permutation matches the expected output using absolute positions (1-indexed)"""
+def check_prediction(generated, expected_output, no_separator=False):
+    """Simple check if prediction matches expected output"""
     
     if no_separator:
-        # For no separator case: expected output is just the last token
         generated_tokens = generated.strip().split()
         if not generated_tokens:
-            return "empty output", -1
-        
+            return False
         last_token = generated_tokens[-1]
-        if last_token != expected_output:
-            return f"failed at last position", len(generated_tokens)
-        return "", -1  # Success
+        return last_token == expected_output
     
-    # Original logic for separator case
+    # For separator case - extract prediction after %
     if '%' not in generated:
-        return "wrong syntax", -1
+        return False
     
-    # Split at '%'
     parts = generated.split('%')
-    if len(parts) != 2:
-        return "wrong syntax", -1
+    if len(parts) < 2:
+        return False
     
-    # Get the full input sequence and model's output
-    full_input = parts[0].strip()
-    model_output = parts[1].strip()
-    
-    # Split into tokens
-    full_input_tokens = full_input.split()
-    model_output_tokens = model_output.split()
-    expected_tokens = expected_output.split()
-    
-    # Check if the length matches
-    if len(model_output_tokens) != len(expected_tokens):
-        return "wrong length", -1
-    
-    # Calculate absolute positions (1-indexed)
-    # Position = len(input_tokens) + 1 (for '%') + relative_position_in_output + 1 (for 1-indexing)
-    input_length = len(full_input_tokens)
-    output_start_position = input_length + 2  # +1 for '%', +1 for 1-indexing
-    
-    # Check if each token matches the expected output
-    for i, (expected, actual) in enumerate(zip(expected_tokens, model_output_tokens)):
-        if expected != actual:
-            absolute_position = output_start_position + i
-            return f"failed at position {absolute_position}", absolute_position
-    
-    return "", -1  # Success
+    model_output = parts[-1].strip()  # Take last part after final %
+    return model_output == expected_output
 
 def main():
     args = parse_args()
@@ -203,14 +175,7 @@ def main():
         pass
     
     total = 0
-    wrong = 0
-    errors_by_type = {
-        "wrong syntax": 0,
-        "wrong length": 0,
-        "empty output": 0,
-        "failed at last position": 0,
-        "failed at position": {}  # Dictionary to track failures at each absolute position
-    }
+    correct = 0
     
     # Use appropriate batch size for tracking purposes
     batch_size = min(100, len(encoded_texts))
@@ -220,7 +185,7 @@ def main():
     if args.no_separator:
         print("Note: Testing last token prediction (no separator mode)")
     else:
-        print("Note: Error positions are now reported as absolute positions (1-indexed from start of input)")
+        print("Note: Testing with % separator")
     
     # Process in batches (modified for individual tensors)
     for i in tqdm(range(0, total_samples, batch_size)):
@@ -252,93 +217,40 @@ def main():
                 prompt = test_prompts[prompt_idx]
                 expected_output = test_expected_outputs[prompt_idx]
                 
-                # Evaluate by comparing with expected output
-                error_type, error_idx = check_permutation_with_expected(item, expected_output, args.no_separator)
+                # Simple check if prediction is correct
+                is_correct = check_prediction(item, expected_output, args.no_separator)
                 total += 1
+                if is_correct:
+                    correct += 1
                 
-                # Track error types
-                if error_type != "":
-                    wrong += 1
-                    if error_type == "wrong syntax":
-                        errors_by_type["wrong syntax"] += 1
-                    elif error_type == "wrong length":
-                        errors_by_type["wrong length"] += 1
-                    elif error_type == "empty output":
-                        errors_by_type["empty output"] += 1
-                    elif error_type == "failed at last position":
-                        errors_by_type["failed at last position"] += 1
-                    elif error_type.startswith("failed at position"):
-                        if error_idx not in errors_by_type["failed at position"]:
-                            errors_by_type["failed at position"][error_idx] = 0
-                        errors_by_type["failed at position"][error_idx] += 1
-                
-                # Write to output file in the new format
+                # Extract predicted token
                 if args.no_separator:
-                    # For no separator, show the generated token
                     generated_tokens = item.strip().split()
-                    last_token = generated_tokens[-1] if generated_tokens else "no_output"
-                    error_msg = f"  {error_type}" if error_type else ""
-                    f.write(f"{prompt} -> {last_token} (expected: {expected_output}){error_msg}\n")
+                    predicted_token = generated_tokens[-1] if generated_tokens else "no_output"
                 else:
-                    # Original format
-                    output_part = item.split('%')[1].strip() if '%' in item else 'no output'
-                    error_msg = f"  {error_type}" if error_type else ""
-                    f.write(f"{prompt} {output_part}{error_msg}\n")
+                    predicted_token = item.split('%')[-1].strip() if '%' in item else 'no_output'
+                
+                # Write simple format: prompt % prediction [x if wrong]
+                status = " [x]" if not is_correct else ""
+                f.write(f"{prompt} {predicted_token}{status}\n")
     
     # Calculate accuracy
-    accuracy = (total - wrong) / total * 100 if total > 0 else 0
-    error_rate = wrong / total * 100 if total > 0 else 0
+    accuracy = (correct / total * 100) if total > 0 else 0
     
     print(f"\nTest Results:")
     print(f"Total samples: {total}")
-    print(f"Correct predictions: {total - wrong}")
-    print(f"Incorrect predictions: {wrong}")
+    print(f"Correct predictions: {correct}")
+    print(f"Incorrect predictions: {total - correct}")
     print(f"Accuracy: {accuracy:.2f}%")
-    print(f"Error Rate: {error_rate:.2f}%")
-    
-    print("\nError breakdown:")
-    print(f"- wrong syntax: {errors_by_type['wrong syntax']}")
-    print(f"- wrong length: {errors_by_type['wrong length']}")
-    print(f"- empty output: {errors_by_type['empty output']}")
-    print(f"- failed at last position: {errors_by_type['failed at last position']}")
-    if not args.no_separator:
-        print("- failed at position :")
-        for pos, count in sorted(errors_by_type["failed at position"].items()):
-            percentage = (count / total) * 100
-            print(f"  - position {pos}: {count} ({percentage:.2f}%)")
     
     # Add summary to the output file
     with open(output_file, 'a') as f:
         f.write("\n" + "-"*50 + "\n")
-        f.write("SUMMARY OF TEST RESULTS:\n")
-        f.write(f"MODEL CONFIGURATION:\n")
-        f.write(f"- Checkpoint: {args.ckpt_iter}\n")
-        f.write(f"- Layers: {gptconf.n_layer}\n")
-        f.write(f"- Heads: {gptconf.n_head}\n")
-        f.write(f"- Embedding dim: {gptconf.n_embd}\n")
-        f.write(f"- Using identity embeddings: {getattr(gptconf, 'use_identity_embeddings', False)}\n")
-        f.write(f"- Using fixed positions: {getattr(gptconf, 'use_fixed_positions', False)}\n")
-        f.write(f"- Permutation type: {args.permutation_type}\n")
-        f.write(f"- No separator mode: {args.no_separator}\n")
-        f.write("\n")
-        f.write(f"TEST RESULTS:\n")
-        f.write(f"Total samples: {total}\n")
-        f.write(f"Correct predictions: {total - wrong}\n")
-        f.write(f"Incorrect predictions: {wrong}\n")
+        f.write("SUMMARY:\n")
         f.write(f"Accuracy: {accuracy:.2f}%\n")
-        f.write(f"Error Rate: {error_rate:.2f}%\n")
-        f.write("\nError breakdown:\n")
-        f.write(f"- wrong syntax: {errors_by_type['wrong syntax']}\n")
-        f.write(f"- wrong length: {errors_by_type['wrong length']}\n")
-        f.write(f"- empty output: {errors_by_type['empty output']}\n")
-        f.write(f"- failed at last position: {errors_by_type['failed at last position']}\n")
-        if not args.no_separator:
-            f.write("- failed at absolute position (1-indexed):\n")
-            for pos, count in sorted(errors_by_type["failed at position"].items()):
-                percentage = (count / total) * 100
-                f.write(f"  - position {pos}: {count} ({percentage:.2f}%)\n")
+        f.write(f"Total: {total}, Correct: {correct}, Wrong: {total - correct}\n")
     
     print(f"\nResults saved to: {output_file}")
 
 if __name__ == "__main__":
-    main()
+    main() 
