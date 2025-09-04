@@ -176,6 +176,9 @@ def main():
     
     total = 0
     correct = 0
+    # Track unique sequences
+    unique_sequences = set()
+    unique_correct = set()
     
     # Use appropriate batch size for tracking purposes
     batch_size = min(100, len(encoded_texts))
@@ -217,11 +220,21 @@ def main():
                 prompt = test_prompts[prompt_idx]
                 expected_output = test_expected_outputs[prompt_idx]
                 
+                # Extract unique sequence (prompt without the % part)
+                if args.no_separator:
+                    unique_seq = prompt
+                else:
+                    unique_seq = prompt.replace(' %', '')
+                
+                # Track unique sequences
+                unique_sequences.add(unique_seq)
+                
                 # Simple check if prediction is correct
                 is_correct = check_prediction(item, expected_output, args.no_separator)
                 total += 1
                 if is_correct:
                     correct += 1
+                    unique_correct.add(unique_seq)
                 
                 # Extract predicted token
                 if args.no_separator:
@@ -242,6 +255,7 @@ def main():
     print(f"Correct predictions: {correct}")
     print(f"Incorrect predictions: {total - correct}")
     print(f"Accuracy: {accuracy:.2f}%")
+    print(f"Unique sequences correct: {len(unique_correct)}/{len(unique_sequences)}")
     
     # Add summary to the output file
     with open(output_file, 'a') as f:
@@ -249,8 +263,9 @@ def main():
         f.write("SUMMARY:\n")
         f.write(f"Accuracy: {accuracy:.2f}%\n")
         f.write(f"Total: {total}, Correct: {correct}, Wrong: {total - correct}\n")
+        f.write(f"Unique sequences correct: {len(unique_correct)}/{len(unique_sequences)}\n")
     
     print(f"\nResults saved to: {output_file}")
 
 if __name__ == "__main__":
-    main() 
+    main()
