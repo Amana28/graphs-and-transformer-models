@@ -214,6 +214,12 @@ else:
     train_data = np.memmap(os.path.join(data_dir, f'train_{num_list_copies}.bin'), dtype=np.uint16, mode='r')
     val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
 
+# Calculate epoch info for tracking
+total_sequences = len(train_data) // (block_size + 1)
+iterations_per_epoch = total_sequences // train_batch_size
+print(f"Total training sequences: {total_sequences}")
+print(f"Iterations per epoch: {iterations_per_epoch}")
+
 def get_batch(split):
     data = train_data if split == 'train' else val_data
     batch_size = train_batch_size if split == 'train' else val_batch_size
@@ -404,12 +410,14 @@ while True:
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-        logger.info(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-        open_and_append(log_file_name, f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        current_epoch = iter_num // iterations_per_epoch if iterations_per_epoch > 0 else 0
+        print(f"step {iter_num} (epoch {current_epoch}): train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        logger.info(f"step {iter_num} (epoch {current_epoch}): train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        open_and_append(log_file_name, f"step {iter_num} (epoch {current_epoch}): train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         if wandb_log:
             wandb.log({
                 "iter": iter_num,
+                "epoch": current_epoch,
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
                 "lr": lr,
@@ -465,13 +473,14 @@ while True:
     dt = t1 - t0
     t0 = t1
     if iter_num % log_interval == 0 and master_process:
+        current_epoch = iter_num // iterations_per_epoch if iterations_per_epoch > 0 else 0
         lossf = loss.item() * gradient_accumulation_steps
         if local_iter_num >= 5: # let the training loop settle a bit
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
-        logger.info(f"iter {iter_num}: loss {lossf:.4f}")
-        open_and_append(log_file_name, f"iter {iter_num}: loss {lossf:.4f}")
+        print(f"iter {iter_num} (epoch {current_epoch}): loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        logger.info(f"iter {iter_num} (epoch {current_epoch}): loss {lossf:.4f}")
+        open_and_append(log_file_name, f"iter {iter_num} (epoch {current_epoch}): loss {lossf:.4f}")
     
     iter_num += 1
     local_iter_num += 1
