@@ -256,14 +256,17 @@ def main():
     print(f"Incorrect predictions: {total - correct}")
     print(f"Accuracy: {accuracy:.2f}%")
     print(f"Unique sequences correct: {len(unique_correct)}/{len(unique_sequences)}")
+    print(f"Temperature: {args.temperature}")
     
     # Add summary to the output file
     with open(output_file, 'a') as f:
         f.write("\n" + "-"*50 + "\n")
         f.write("SUMMARY:\n")
+        f.write(f"Temperature: {args.temperature}\n")
         f.write(f"Accuracy: {accuracy:.2f}%\n")
         f.write(f"Total: {total}, Correct: {correct}, Wrong: {total - correct}\n")
         f.write(f"Unique sequences correct: {len(unique_correct)}/{len(unique_sequences)}\n")
+        
     
     print(f"\nResults saved to: {output_file}")
 
