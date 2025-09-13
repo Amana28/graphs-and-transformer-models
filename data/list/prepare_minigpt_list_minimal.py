@@ -71,6 +71,7 @@ def process_reasoning(s, stoi, block_size):
     for st in split_text:
         if st != "":
             enc_str = encode(st, stoi)
+            enc_str = encode(st, stoi) + [0]  # Add newline token
             ret += enc_str
     return ret
 
@@ -111,9 +112,9 @@ idx = 0
 # itos[idx] = '[PAD]'
 # idx += 1
 
-# stoi['\n'] = idx
-# itos[idx] = '\n'
-# idx += 1
+stoi['\n'] = idx
+itos[idx] = '\n'
+idx += 1
 
 # Add all other tokens including numbers and '%'
 for ch in chars:
@@ -132,7 +133,7 @@ def encode(s, stoi):
 def decode(l, itos):
     return decode_string(l, itos)
 
-# Calculate block size (round up to nearest multiple of 4)
+# Calculate block size 
 block_size = max(get_block_size(train_data, stoi), get_block_size(val_data, stoi))
 print(f"The block size is {block_size}")
 

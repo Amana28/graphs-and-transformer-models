@@ -162,7 +162,7 @@ dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto i
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 # updated config values
-learning_rate = 5e-4  # change from 5e-4 
+learning_rate = 5e-2  # change from 5e-4 
 warmup_iters = max_iters//20  # change warmup (from //20)
 dropout = 0.0  # change from 0.0 for better regularization
 weight_decay = 0.0  # change from 0.1 for better regularization
@@ -223,13 +223,10 @@ print(f"Iterations per epoch: {iterations_per_epoch}")
 def get_batch(split):
     data = train_data if split == 'train' else val_data
     batch_size = train_batch_size if split == 'train' else val_batch_size
-    
-    data_size = block_size
-    data = train_data if split == 'train' else val_data
+    data_size = block_size + 1 # including '\n'
     ix = torch.randint( (len(data) - data_size)//data_size , (batch_size,)) * data_size
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
     y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-    
     if device_type == 'cuda':
         # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
         x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
