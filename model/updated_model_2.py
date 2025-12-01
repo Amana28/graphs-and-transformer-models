@@ -233,7 +233,55 @@ class GPT(nn.Module):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
         # report number of parameters
-        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+        # report number of parameters
+        self.report_parameter_stats()
+
+    def report_parameter_stats(self):
+        """
+        Prints a detailed yet succinct breakdown of the model's parameters.
+        """
+        # 1. Calculate totals and breakdown
+        total_params = sum(p.numel() for p in self.parameters())
+        
+        # Breakdown counters
+        embeddings = 0
+        attention = 0
+        layernorm = 0
+        mlp = 0
+        head = 0
+        others = 0
+
+        for pn, p in self.named_parameters():
+            n = p.numel()
+            if 'wte' in pn or 'wpe' in pn:
+                embeddings += n
+            elif 'attn' in pn:
+                attention += n
+            elif 'ln_' in pn:
+                layernorm += n
+            elif 'mlp' in pn:
+                mlp += n
+            elif 'lm_head' in pn:
+                head += n
+            else:
+                others += n
+
+        # 2. Smart Formatting Function
+        def format_params(num):
+            if num >= 1e6:
+                return f"{num/1e6:.2f}M"
+            elif num >= 1e3:
+                return f"{num/1e3:.2f}K"
+            else:
+                return f"{num}"
+
+        # 3. Print Report
+        breakdown_str = f"Emb: {format_params(embeddings)} | Attn: {format_params(attention)} | LN: {format_params(layernorm)}"
+        if mlp > 0: breakdown_str += f" | MLP: {format_params(mlp)}"
+        if head > 0: breakdown_str += f" | Head: {format_params(head)}"
+        if others > 0: breakdown_str += f" | Others: {format_params(others)}"
+        
+        print(f"Number of parameters: {format_params(total_params)} ({breakdown_str})")
 
     def get_num_params(self, non_embedding=True):
         """

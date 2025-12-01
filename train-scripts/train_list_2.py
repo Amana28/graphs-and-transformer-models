@@ -39,6 +39,7 @@ parser.add_argument('--use_identity_embeddings', type=bool, default=False, help=
 parser.add_argument('--use_fixed_positions', type=bool, default=False, help='Use fixed positional embeddings (default: False)')
 parser.add_argument('--fixed_length', type=int, default=None, help='Fixed length of lists if specified')
 parser.add_argument('--permutation_type', type=str, default="reversal", help='Type of permutation (default: reversal)')
+parser.add_argument('--train_batch_size', type=int, default=1024, help='Training batch size (default: 1024)')
 args = parser.parse_args()
 dataset = args.dataset
 n_layer = args.n_layer
@@ -97,7 +98,7 @@ wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
 gradient_accumulation_steps = 1 # used to simulate larger batch sizes
-train_batch_size = 1024 # if gradient_accumulation_steps > 1, this is the micro-batch size
+train_batch_size = args.train_batch_size # if gradient_accumulation_steps > 1, this is the micro-batch size
 val_batch_size = 64
 batch_size = train_batch_size
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
@@ -121,10 +122,11 @@ dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto i
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 # # updated config values
+learning_rate = 5e-3  # change from 5e-4 
 # dropout = 0.1  # Increased from 0.0 for better regularization
 # weight_decay = 0.2  # Increased from 0.1 for better regularization
 # # Print updated config values
-# print(f"Using regularization with dropout={dropout} and weight_decay={weight_decay}")
+print(f"Using regularization with learning rate={learning_rate}, warmup iterations={warmup_iters}, dropout={dropout} and weight_decay={weight_decay}")
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
