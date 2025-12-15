@@ -51,7 +51,7 @@ try:
         val_data = f.read()
     print(f"Length of val dataset in characters: {len(val_data):,}")
 
-    all_data = train_data + val_data
+    all_data = train_data + "\n" + val_data
 except FileNotFoundError as e:
     print(f"Error: {e}")
     print("Please make sure you've generated the text files first.")
