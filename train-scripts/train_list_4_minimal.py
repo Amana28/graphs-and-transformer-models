@@ -38,6 +38,9 @@ parser.add_argument('--use_identity_V', type=bool, default=False, help='Use iden
 parser.add_argument('--fixed_length', type=int, default=None, help='Fixed length of lists if specified')
 parser.add_argument('--permutation_type', type=str, default="reversal", help='Type of permutation (default: reversal)')
 parser.add_argument('--train_batch_size', type=int, default=256, help='Training batch size (default: 256)')
+parser.add_argument('--learning_rate', type=float, default=5e-2, help='Max learning rate (default: 5e-2)')
+parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate (default: 0.0)')
+parser.add_argument('--weight_decay', type=float, default=0.0, help='Weight decay (default: 0.0)')
 args = parser.parse_args()
 
 dataset = args.dataset
@@ -141,19 +144,16 @@ train_batch_size = args.train_batch_size # if gradient_accumulation_steps > 1, t
 print(f"Using Training Batch Size: {train_batch_size}")
 val_batch_size = args.train_batch_size // 2
 batch_size = train_batch_size
-dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
-learning_rate = 5e-4 # max learning rate 
-weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
 grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
 decay_lr = True # whether to decay the learning rate
 warmup_iters = max_iters//20 # how many steps to warm up for
+min_lr = args.learning_rate/10 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 lr_decay_iters = max_iters # should be ~= max_iters per Chinchilla
-min_lr = learning_rate/10 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 # DDP settings
 backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
@@ -161,13 +161,12 @@ device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps'
 dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
-# updated config values
-learning_rate = 5e-2  # change from 5e-4 
-warmup_iters = max_iters//20  # change warmup (from //20)
-dropout = 0.0  # change from 0.0 for better regularization
-weight_decay = 0.0  # change from 0.1 for better regularization
-# # Print updated config values
-print(f"Using regularization with learning rate={learning_rate}, warmup iterations={warmup_iters}, dropout={dropout} and weight_decay={weight_decay}")
+# Use values from args
+learning_rate = args.learning_rate
+dropout = args.dropout
+weight_decay = args.weight_decay
+# Print config values
+print(f"Using regularization with learning_rate={learning_rate}, warmup_iters={warmup_iters}, dropout={dropout}, weight_decay={weight_decay}")
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
@@ -475,7 +474,7 @@ while True:
         if local_iter_num >= 5: # let the training loop settle a bit
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num} (epoch {current_epoch}): loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        print(f"iter {iter_num} (epoch {current_epoch}): loss {lossf:.4f}, time {dt*1000:.2f}ms, lr {lr:.6f}")
         logger.info(f"iter {iter_num} (epoch {current_epoch}): loss {lossf:.4f}")
         open_and_append(log_file_name, f"iter {iter_num} (epoch {current_epoch}): loss {lossf:.4f}")
     
