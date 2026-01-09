@@ -131,26 +131,16 @@ def main():
             line = line.strip()
             if not line:
                 continue
+            
+            # Always use all tokens except last as prompt, last token as expected
+            tokens = line.split()
+            if len(tokens) >= 2:
+                # Use all tokens except the last as prompt
+                prompt_tokens = tokens[:-1]
+                expected_token = tokens[-1]  # Only test the last token
                 
-            if args.no_separator:
-                # For no separator: the line is the complete sequence
-                # Expected output is the last token
-                tokens = line.split()
-                if len(tokens) >= 2:
-                    # Use all tokens except the last as prompt
-                    prompt_tokens = tokens[:-1]
-                    expected_token = tokens[-1]
-                    
-                    test_prompts.append(" ".join(prompt_tokens))
-                    test_expected_outputs.append(expected_token)
-            else:
-                # Original separator logic
-                if '%' in line:
-                    parts = line.split('%')
-                    prefix = parts[0].strip() + ' %'  # Include % as prompt ending
-                    expected = parts[1].strip()  # Get the expected output part
-                    test_prompts.append(prefix)
-                    test_expected_outputs.append(expected)
+                test_prompts.append(" ".join(prompt_tokens))
+                test_expected_outputs.append(expected_token)
     
     print(f"Loaded {len(test_prompts)} test examples")
     
@@ -202,12 +192,8 @@ def main():
             # Add batch dimension
             x = encoded_texts[j].unsqueeze(0)
             
-            # Generate completion
-            if args.no_separator:
-                # For no separator, we just need to generate the next token
-                y = model.generate(x, 1, temperature=args.temperature, top_k=top_k)  # Generate only 1 token
-            else:
-                y = model.generate(x, max_new_tokens, temperature=args.temperature, top_k=top_k)
+            # Generate only 1 token (next token prediction)
+            y = model.generate(x, 1, temperature=args.temperature, top_k=top_k)
             
             # Decode and save
             y_pred.append(decode(y[0].tolist(), itos).split('\n')[0])
@@ -220,32 +206,25 @@ def main():
                 prompt = test_prompts[prompt_idx]
                 expected_output = test_expected_outputs[prompt_idx]
                 
-                # Extract unique sequence (prompt without the % part)
-                if args.no_separator:
-                    unique_seq = prompt
-                else:
-                    unique_seq = prompt.replace(' %', '')
-                
                 # Track unique sequences
-                unique_sequences.add(unique_seq)
+                unique_sequences.add(prompt)
                 
-                # Simple check if prediction is correct
-                is_correct = check_prediction(item, expected_output, args.no_separator)
+                # Get the last token generated (this is the prediction)
+                generated_tokens = item.strip().split()
+                predicted_token = generated_tokens[-1] if generated_tokens else "no_output"
+                
+                # Simple check if prediction matches expected
+                is_correct = (predicted_token == expected_output)
                 total += 1
                 if is_correct:
                     correct += 1
-                    unique_correct.add(unique_seq)
+                    unique_correct.add(prompt)
                 
-                # Extract predicted token
-                if args.no_separator:
-                    generated_tokens = item.strip().split()
-                    predicted_token = generated_tokens[-1] if generated_tokens else "no_output"
+                # Write simple format: prompt -> prediction (show expected only if wrong)
+                if is_correct:
+                    f.write(f"{prompt} -> {predicted_token}\n")
                 else:
-                    predicted_token = item.split('%')[-1].strip() if '%' in item else 'no_output'
-                
-                # Write simple format: prompt % prediction [x if wrong]
-                status = " [x]" if not is_correct else ""
-                f.write(f"{prompt} {predicted_token}{status}\n")
+                    f.write(f"{prompt} -> {predicted_token} (expected: {expected_output}) [x]\n")
     
     # Calculate accuracy
     accuracy = (correct / total * 100) if total > 0 else 0
