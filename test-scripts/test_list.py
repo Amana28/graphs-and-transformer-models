@@ -94,7 +94,7 @@ def main():
         ckpt_path = os.path.join(out_dir, f'{args.ckpt_iter}_ckpt_{args.num_list_copies}.pt')
     
     print(f"Loading checkpoint from {ckpt_path}...")
-    checkpoint = torch.load(ckpt_path, map_location=args.device)
+    checkpoint = torch.load(ckpt_path, map_location=args.device, weights_only=False)
     gptconf = GPTConfig(**checkpoint['model_args'])
     model = GPT(gptconf)
     
