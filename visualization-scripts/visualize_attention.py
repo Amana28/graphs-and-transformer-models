@@ -33,8 +33,14 @@ def parse_args():
                         help='Path to model checkpoint')
     parser.add_argument('--meta_path', type=str, required=True,
                         help='Path to meta.pkl file')
-    parser.add_argument('--input', type=str, required=True,
-                        help='Input sequence (space-separated tokens)')
+    parser.add_argument('--input', type=str, default=None,
+                        help='Single input sequence (space-separated tokens)')
+    parser.add_argument('--inputs_file', type=str, default=None,
+                        help='Path to test file with multiple inputs (one per line)')
+    parser.add_argument('--custom_inputs', type=str, nargs='+', default=None,
+                        help='List of custom input sequences to average over')
+    parser.add_argument('--target_length', type=int, default=None,
+                        help='Filter inputs to this sequence length (for averaging)')
     parser.add_argument('--heads', type=int, nargs='+', default=[0],
                         help='Attention heads to visualize (default: 0)')
     parser.add_argument('--layers', type=int, nargs='+', default=[0],
@@ -194,8 +200,112 @@ def visualize_attention(model, input_tokens, token_labels, heads, layers, config
     plt.close()
 
 
+def visualize_average_attention(model, input_list, stoi, heads, layers, config, target_length=None, save_path=None):
+    """Visualize average attention patterns across multiple inputs"""
+    device = next(model.parameters()).device
+    
+    # Filter by length if specified
+    if target_length:
+        input_list = [inp for inp in input_list if len(inp.split()) == target_length]
+        print(f"Filtered to {len(input_list)} inputs with length {target_length}")
+    
+    if not input_list:
+        print("No valid inputs found!")
+        return
+    
+    # Determine sequence length from first input
+    seq_length = len(input_list[0].split())
+    
+    # Initialize attention accumulators
+    attention_sums = {}
+    valid_count = 0
+    
+    for i, input_text in enumerate(input_list):
+        tokens = input_text.split()
+        if len(tokens) != seq_length:
+            continue  # Skip inputs with different lengths
+            
+        # Encode tokens
+        try:
+            input_tokens = [stoi[t] for t in tokens]
+        except KeyError as e:
+            print(f"Skipping input {i}: token {e} not in vocabulary")
+            continue
+        
+        input_tensor = torch.tensor([input_tokens], dtype=torch.long).to(device)
+        
+        with torch.no_grad():
+            _, _, attention_weights = model(input_tensor, return_attn_weights=True)
+        
+        # Accumulate attention weights
+        for layer_idx in layers:
+            if layer_idx < len(attention_weights):
+                layer_weights = attention_weights[layer_idx]
+                for head_idx in heads:
+                    if head_idx < layer_weights.shape[1]:
+                        key = (layer_idx, head_idx)
+                        attn = layer_weights[0, head_idx].cpu().numpy()
+                        if key not in attention_sums:
+                            attention_sums[key] = np.zeros_like(attn)
+                        attention_sums[key] += attn
+        
+        valid_count += 1
+        if (i + 1) % 50 == 0:
+            print(f"Processed {i + 1}/{len(input_list)} inputs")
+    
+    print(f"Averaged over {valid_count} valid inputs")
+    
+    if valid_count == 0:
+        print("No valid inputs processed!")
+        return
+    
+    # Compute averages and plot
+    n_layers = len(layers)
+    n_heads = len(heads)
+    fig, axes = plt.subplots(n_layers, n_heads, figsize=(6*n_heads, 5*n_layers), squeeze=False)
+    
+    # Create position labels
+    position_labels = [str(i+1) for i in range(seq_length)]
+    
+    for row, layer_idx in enumerate(layers):
+        for col, head_idx in enumerate(heads):
+            key = (layer_idx, head_idx)
+            if key in attention_sums:
+                ax = axes[row, col]
+                avg_attn = attention_sums[key] / valid_count
+                
+                sns.heatmap(avg_attn, cmap="viridis", cbar=True, square=True,
+                           annot=False, ax=ax, vmin=0, vmax=1)
+                
+                ax.set_title(f'Layer {layer_idx}, Head {head_idx}', fontsize=12)
+                ax.set_xticks(np.arange(seq_length) + 0.5)
+                ax.set_yticks(np.arange(seq_length) + 0.5)
+                ax.set_xticklabels(position_labels, fontsize=9)
+                ax.set_yticklabels(position_labels, fontsize=9)
+                ax.set_xlabel('Key Position', fontsize=10)
+                ax.set_ylabel('Query Position', fontsize=10)
+    
+    plt.suptitle(f'Average Attention Patterns ({valid_count} samples, length {seq_length})', fontsize=14, y=1.02)
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved to {save_path}")
+    else:
+        plt.show()
+    
+    plt.close()
+    
+    return attention_sums, valid_count
+
+
 def main():
     args = parse_args()
+    
+    # Validate input arguments
+    if not args.input and not args.inputs_file and not args.custom_inputs:
+        print("Error: Must provide one of --input, --inputs_file, or --custom_inputs")
+        return
     
     # Load vocabulary
     print(f"Loading vocabulary from {args.meta_path}...")
@@ -207,25 +317,43 @@ def main():
     model, config = load_model(args.checkpoint_path, args.device)
     
     print(f"\nModel: {config.n_layer} layers, {config.n_head} heads, {config.n_embd} embd")
-    print(f"Input: {args.input}")
     print(f"Visualizing heads: {args.heads}, layers: {args.layers}")
     
-    # Encode input
-    token_labels = args.input.split()
-    input_tokens = []
-    for token in token_labels:
-        if token in stoi:
-            input_tokens.append(stoi[token])
-        else:
-            print(f"Warning: Token '{token}' not in vocabulary, skipping")
+    # Mode 1: Single input visualization
+    if args.input:
+        print(f"Single input mode: {args.input}")
+        token_labels = args.input.split()
+        input_tokens = []
+        for token in token_labels:
+            if token in stoi:
+                input_tokens.append(stoi[token])
+            else:
+                print(f"Warning: Token '{token}' not in vocabulary, skipping")
+        
+        if not input_tokens:
+            print("Error: No valid tokens found")
+            return
+        
+        visualize_attention(model, input_tokens, token_labels, args.heads, args.layers, 
+                           config, save_path=args.save_path)
     
-    if not input_tokens:
-        print("Error: No valid tokens found")
-        return
+    # Mode 2: Average from test file
+    elif args.inputs_file:
+        print(f"Inputs file mode: {args.inputs_file}")
+        with open(args.inputs_file, 'r') as f:
+            input_list = [line.strip() for line in f if line.strip()]
+        print(f"Loaded {len(input_list)} inputs from file")
+        
+        visualize_average_attention(model, input_list, stoi, args.heads, args.layers,
+                                   config, target_length=args.target_length, 
+                                   save_path=args.save_path)
     
-    # Visualize
-    visualize_attention(model, input_tokens, token_labels, args.heads, args.layers, 
-                       config, save_path=args.save_path)
+    # Mode 3: Average from custom inputs list
+    elif args.custom_inputs:
+        print(f"Custom inputs mode: {len(args.custom_inputs)} inputs")
+        visualize_average_attention(model, args.custom_inputs, stoi, args.heads, args.layers,
+                                   config, target_length=args.target_length,
+                                   save_path=args.save_path)
 
 
 if __name__ == '__main__':
