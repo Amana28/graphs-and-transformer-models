@@ -199,8 +199,8 @@ if master_process:
     os.makedirs(out_dir, exist_ok=True)
 
 torch.manual_seed(1337 + seed_offset)
-torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
-torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
+torch.backends.cuda.matmul.fp32_precision = 'tf32'  # enable TF32 on matmul (new API for PyTorch 2.9+)
+torch.backends.cudnn.conv.fp32_precision = 'tf32'  # enable TF32 on cudnn (new API for PyTorch 2.9+)
 device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
 # note: float16 data type will automatically use a GradScaler
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
